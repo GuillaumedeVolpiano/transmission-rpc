@@ -72,6 +72,7 @@ library
   other-modules:
     Transmission.RPC.Constants
     Transmission.RPC.Utils
+    Transmission.RPC.Errors
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
