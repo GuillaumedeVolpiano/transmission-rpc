@@ -10,13 +10,18 @@ module Transmission.RPC.Client (
   , deleteTorrent
   , startTorrent
   , startAll
+  , stopTorrent
+  , verifyTorrent
+  , reannounceTorrent
+  , getTorrent
+  , getTorrents
   )
 where
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
 import           Data.Aeson                      (ToJSON,
-                                                  Value (Array, Null, Object, Number),
-                                                  fromJSON, object, toJSON)
+                                                  Value (Array, Null, Number, Object),
+                                                  object, toJSON)
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
 import qualified Data.Aeson.KeyMap               as K (insert, lookup, member,
@@ -28,8 +33,8 @@ import qualified Data.ByteString.Lazy            as L (ByteString)
 import           Data.Fixed                      (E3, Fixed, showFixed)
 import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
-import           Data.Maybe                      (catMaybes, fromJust,
-                                                  fromMaybe, mapMaybe)
+import           Data.Maybe                      (catMaybes, fromMaybe,
+                                                  mapMaybe)
 import qualified Data.Text                       as T (pack)
 import qualified Data.Vector                     as V (toList)
 import           Effectful                       (Eff, (:>))
@@ -42,7 +47,7 @@ import           Effectful.Time                  (Time, monotonicTime)
 import           Effectful.Wreq                  (Options, Response, Wreq,
                                                   header, manager, responseBody,
                                                   responseHeader,
-                                                  responseStatus, statusCode)
+                                                  responseStatus, statusCode, defaults)
 import           Effectful.Wreq.Session          (Session, get, newSession,
                                                   postWith)
 import           Network.HTTP.Client             (HttpException (HttpExceptionRequest),
@@ -66,12 +71,12 @@ currentProtocolVersion :: Int
 currentProtocolVersion = 17
 
 -- | Create a client from a URL, a timeout and a Logger
-fromUrl :: Wreq :> es => String -> Options -> Timeout -> Eff es Client
+fromUrl :: Wreq :> es => String -> Maybe Options -> Timeout -> Eff es Client
 fromUrl url opts timeout =  do
                       sesh <- newSession
                       sessionId <- getSessionId url sesh
                       let timeout' = fromMaybe defaultTimeout timeout
-                          opts' = opts & header sessionIdHeaderName .~ [sessionId] & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro timeout'})
+                          opts' = fromMaybe defaults opts & header sessionIdHeaderName .~ [sessionId] & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro timeout'})
                       pure $ newClient url sesh opts' currentProtocolVersion
 
 
@@ -101,6 +106,36 @@ startAll bypassQueue timeout = do
   ids <- mapMaybe (extractInt . K.lookup (fromString "id")) <$> getTorrents Nothing (Just []) Nothing
   void . request method Nothing (Just ids) True $ timeout
 
+-- | Stop torrent(s) with provided id(s)
+stopTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+stopTorrent ids = void . request TorrentStop Nothing (Just ids) True
+
+-- | Verify torrent(s) with provided id(s)
+verifyTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+verifyTorrent ids = void . request TorrentVerify Nothing (Just ids) True
+
+-- | Reannounce torrent(s) with provided id(s)
+reannounceTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
+
+-- | Get information for torrent with provided id. arguments contains a list of field names to be returned, when arguments=None (default), all fields are requested. See the Torrent class for more information.
+-- new argument format in rpc_version 16 is unnecessarily and this lib can’t handle table response, So it’s unsupported.
+-- Returns a Torrent object with the requested fields.
+-- Note:
+--            It's recommended that you only fetch arguments you need,
+--            this could improve response speed.
+--
+--            For example, fetch all fields from transmission daemon with 1500 torrents would take ~5s,
+--            but is only ~0.2s if to fetch 6 fields.
+getTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => ID -> Maybe [String] -> Timeout -> Eff es Torrent
+getTorrent iD fields timeout = do
+  torrents <- getTorrents (Just [iD]) fields timeout
+  case torrents of
+    [] -> throwIO . TransmissionError $ TransmissionContext "No torrent returned" (Just TorrentGet) Nothing Nothing Nothing Nothing
+    [t] -> pure t
+    _ -> throwIO . TransmissionError $ TransmissionContext ("Received more than one torrent: " ++ show torrents) (Just TorrentGet) Nothing Nothing Nothing Nothing
+
+-- | Get information for torrents with provided ids. For more information see Client.get_torrent().
 getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [ID] -> Maybe [String] -> Timeout -> Eff es [Torrent]
 getTorrents ids fields timeout = do
   protocolVersion <- asks getProtocolVersion
@@ -110,7 +145,7 @@ getTorrents ids fields timeout = do
   response <- request TorrentGet (Just . object $ [(fromString "fields", args)]) ids False timeout
   let res = case response of
               Object r -> r
-              _ -> error (show response ++ "is not an object")
+              _        -> error (show response ++ "is not an object")
   case K.lookup (fromString "torrents") res of
                                        Nothing -> throwIO . TransmissionError $ TransmissionContext "Response has no torrent field" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
                                        Just (Array tors) -> pure . map extractValues . V.toList $ tors

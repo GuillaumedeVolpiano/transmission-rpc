@@ -65,7 +65,7 @@ type Timeout = Maybe Int
 type Label = String
 type ID = Int
 
-data RPCMethod = TorrentAdd | TorrentGet | TorrentRemove | TorrentStart | TorrentStartNow | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
@@ -76,9 +76,12 @@ type Torrent = KeyMap Value
 instance ToJSON RPCMethod where
   toJSON TorrentAdd        = toJSON "torrent-add"
   toJSON TorrentGet        = toJSON "torrent-get"
+  toJSON TorrentReannounce = toJSON "torrent-reannounce"
   toJSON TorrentRemove     = toJSON "torrent-remove"
   toJSON TorrentStart      = toJSON "torrent-start"
   toJSON TorrentStartNow   = toJSON "torrent-start-now"
+  toJSON TorrentStop       = toJSON "torrent-stop"
+  toJSON TorrentVerify     = toJSON "torrent-verify"
   toJSON SessionGet        = toJSON "session-get"
   toJSON SessionStats      = toJSON "session-stats"
   toJSON PortTest          = toJSON "port-test"
