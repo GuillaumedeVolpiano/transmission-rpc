@@ -7,28 +7,34 @@ module Transmission.RPC.Client (
   -- * Client methods
   , fromUrl
   , addTorrent
+  , deleteTorrent
+  , startTorrent
+  , startAll
   )
 where
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
-import           Data.Aeson                      (Value (Null, Object), object,
-                                                  toJSON)
-import qualified Data.Aeson                      as A (Value (String))
-import           Data.Aeson.Key                  (fromString, fromText)
+import           Data.Aeson                      (ToJSON,
+                                                  Value (Array, Null, Object, Number),
+                                                  fromJSON, object, toJSON)
+import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
-import qualified Data.Aeson.KeyMap               as K (empty, lookup, member,
+import qualified Data.Aeson.KeyMap               as K (insert, lookup, member,
                                                        singleton)
 import           Data.Aeson.Parser               (json)
 import           Data.Attoparsec.ByteString.Lazy (Result (..), parse)
 import           Data.ByteString                 (ByteString)
 import qualified Data.ByteString.Lazy            as L (ByteString)
 import           Data.Fixed                      (E3, Fixed, showFixed)
+import           Data.Functor                    (void)
+import qualified Data.HashSet                    as S (fromList)
 import           Data.Maybe                      (catMaybes, fromJust,
-                                                  fromMaybe)
+                                                  fromMaybe, mapMaybe)
 import qualified Data.Text                       as T (pack)
+import qualified Data.Vector                     as V (toList)
 import           Effectful                       (Eff, (:>))
 import           Effectful.Error.Static          (HasCallStack)
-import           Effectful.Exception             (try, throwIO)
+import           Effectful.Exception             (throwIO, try)
 import           Effectful.FileSystem            (FileSystem)
 import           Effectful.Log                   (Log, logAttention_, logInfo_)
 import           Effectful.Reader.Static         (Reader, asks)
@@ -46,12 +52,18 @@ import           Network.HTTP.Client             (HttpException (HttpExceptionRe
                                                   responseTimeoutMicro)
 import           Transmission.RPC.Constants      (defaultTimeout,
                                                   sessionIdHeaderName)
-import           Transmission.RPC.Types          (Client, ID, Label,
+import           Transmission.RPC.Errors         (TransmissionContext (..),
+                                                  TransmissionError (..))
+import           Transmission.RPC.Types          (Client (..), ID, Label,
                                                   RPCMethod (..), Timeout,
-                                                  TorrentRef, getOpts,
+                                                  Torrent, TorrentRef, getOpts,
                                                   getSession, getURI, newClient)
-import           Transmission.RPC.Utils          (maybeJSON, readTorrent)
-import Transmission.RPC.Errors (TransmissionError (..), TransmissionContext (..))
+import           Transmission.RPC.Utils          (getTorrentArguments,
+                                                  maybeJSON, readTorrent)
+
+-- constants
+currentProtocolVersion :: Int
+currentProtocolVersion = 17
 
 -- | Create a client from a URL, a timeout and a Logger
 fromUrl :: Wreq :> es => String -> Options -> Timeout -> Eff es Client
@@ -60,8 +72,51 @@ fromUrl url opts timeout =  do
                       sessionId <- getSessionId url sesh
                       let timeout' = fromMaybe defaultTimeout timeout
                           opts' = opts & header sessionIdHeaderName .~ [sessionId] & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro timeout'})
-                      pure $ newClient url sesh opts'
+                      pure $ newClient url sesh opts' currentProtocolVersion
 
+
+-- | Add a torrent to the transfer list
+addTorrent :: (FileSystem :> es, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe String -> Maybe [Label] -> Maybe Int -> Eff es Value
+addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority= do
+                                     torrentData <- readTorrent tref
+                                     let args = Just . object . (torrentData :) . catMaybes $ [maybeJSON ("download-dir", downloadDir), maybeJSON ("files-unwanted", filesUnwanted), maybeJSON ("files-wanted", filesWanted), maybeJSON ("paused", paused), maybeJSON ("peerLimit", peerLimit), maybeJSON ("priority-high", priorityHigh), maybeJSON ("priority-low", priorityLow), maybeJSON ("priority-normal", priorityNormal), maybeJSON ("cookies", cookies), maybeJSON ("labels", labels), maybeJSON ("bandwidthPriority", bandwidthPriority)]
+                                     request TorrentAdd args Nothing False timeout
+
+-- | Remove torrent(s) with provided id(s). Local data will be removed by
+-- transmission daemon if Bool is True
+deleteTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Bool -> Timeout -> Eff es ()
+deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [(fromString "delete-local-data", toJSON deleteData)]) (Just ids) True
+
+-- | Starttorrent(s) with provided id(s)
+startTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Bool -> Timeout -> Eff es ()
+startTorrent ids bypassQueue = void . request (if bypassQueue then TorrentStartNow else TorrentStart) Nothing (Just ids) True
+
+-- | Start all torrents respecting the queue order
+startAll :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
+startAll bypassQueue timeout = do
+  let method = if bypassQueue then TorrentStartNow else TorrentStart
+      extractInt Nothing = Nothing
+      extractInt (Just (Number n)) = Just . round $ n
+      extractInt (Just v) = error ("Value " ++ show v ++ " is not a number")
+  ids <- mapMaybe (extractInt . K.lookup (fromString "id")) <$> getTorrents Nothing (Just []) Nothing
+  void . request method Nothing (Just ids) True $ timeout
+
+getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [ID] -> Maybe [String] -> Timeout -> Eff es [Torrent]
+getTorrents ids fields timeout = do
+  protocolVersion <- asks getProtocolVersion
+  let args = maybe (toJSON . getTorrentArguments $ protocolVersion) (toJSON . S.fromList . ("id":) . ("hashstring" :)) fields
+      extractValues (Object v) = v
+      extractValues v          = error (show v ++ "is not a keymap")
+  response <- request TorrentGet (Just . object $ [(fromString "fields", args)]) ids False timeout
+  let res = case response of
+              Object r -> r
+              _ -> error (show response ++ "is not an object")
+  case K.lookup (fromString "torrents") res of
+                                       Nothing -> throwIO . TransmissionError $ TransmissionContext "Response has no torrent field" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
+                                       Just (Array tors) -> pure . map extractValues . V.toList $ tors
+                                       Just _ -> throwIO . TransmissionError $ TransmissionContext "torrent field does not contain an Array" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
+
+-- Utility functions
 
 getSessionId :: Wreq :> es => String -> Session -> Eff es ByteString
 getSessionId url sesh = do
@@ -70,35 +125,28 @@ getSessionId url sesh = do
                     sessionId (Left e@(HttpExceptionRequest _ (StatusCodeException s _)))
                                   | s ^. (responseStatus . statusCode) == 409 = pure $ s ^. responseHeader sessionIdHeaderName
                                   | otherwise = throwIO e
-                    sessionId (Left e) = throwIO e 
+                    sessionId (Left e) = throwIO e
                 sessionId failGet
 
 
--- | Add a torrent to the transfer list
-addTorrent :: (FileSystem :> es, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe String -> Maybe [Label] -> Maybe Int -> Eff es (KeyMap Value)
-addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority= do
-                                     torrentData <- readTorrent tref
-                                     let args = Just . object . (torrentData :) . catMaybes $ [maybeJSON ("download-dir", downloadDir), maybeJSON ("files-unwanted", filesUnwanted), maybeJSON ("files-wanted", filesWanted), maybeJSON ("paused", paused), maybeJSON ("peerLimit", peerLimit), maybeJSON ("priority-high", priorityHigh), maybeJSON ("priority-low", priorityLow), maybeJSON ("priority-normal", priorityNormal), maybeJSON ("cookies", cookies), maybeJSON ("labels", labels), maybeJSON ("bandwidthPriority", bandwidthPriority)]
-                                     request TorrentAdd args Nothing False timeout
-
-request :: (HasCallStack, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe [ID] -> Bool -> Timeout -> Eff es (KeyMap Value)
+request :: (HasCallStack, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe [ID] -> Bool -> Timeout -> Eff es Value
 request _ _ Nothing True _ = error "request requires ids"
 request _ _ (Just []) True _ = error "request requires ids"
-request rpcm args ids reqIDs timeout = do
-                                          let args' = fromMaybe Null args
-                                              query = object [(fromString "method", toJSON rpcm), (fromString "arguments", args')]
-                                          sesh <- asks getSession
-                                          opts <- asks getOpts
-                                          let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
-                                          uri <- asks getURI
-                                          start <- monotonicTime
-                                          response <- postWith opts' sesh uri query
-                                          elapsed <- (+ negate start) <$> monotonicTime
-                                          logAttention_ (T.pack $ "http request took " ++ showFixed True (fromRational . toRational $ elapsed :: Fixed E3) ++ " s")
-                                          let body = parse json $ response ^. responseBody
-                                          examineBody body rpcm query response
+request rpcm args ids _ timeout = do
+  let args' = maybe id (valueInsert "ids") ids . fromMaybe Null $ args
+      query = object [(fromString "method", toJSON rpcm), (fromString "arguments", args')]
+  sesh <- asks getSession
+  opts <- asks getOpts
+  let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
+  uri <- asks getURI
+  start <- monotonicTime
+  response <- postWith opts' sesh uri query
+  elapsed <- (+ negate start) <$> monotonicTime
+  logAttention_ (T.pack $ "http request took " ++ showFixed True (fromRational . toRational $ elapsed :: Fixed E3) ++ " s")
+  let body = parse json $ response ^. responseBody
+  examineBody body rpcm query response
 
-examineBody :: Log :> es => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es (KeyMap Value)
+examineBody :: Log :> es => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es Value
 examineBody (Fail _ _ e) rpcm query response = logInfo_ (T.pack $ "Error:\n" ++ "Request: " ++ show query ++ "\n" ++ "HTTP Data: " ++  show response) >> throwIO (TransmissionError (TransmissionContext ("failed to parse response as JSON:\n" ++ show e) (Just rpcm ) (Just query) Nothing (Just response) Nothing))
 examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.lookup (fromString "result") bodyMap of
                                         Nothing -> throwIO . TransmissionError $ TransmissionContext "Query failed, response data missing result:\n" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
@@ -107,29 +155,34 @@ examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.look
      checkSuccess success
        | success == toJSON "success" =
               case K.lookup (fromString "arguments") bodyMap of
-                Just (Object res) -> do
+                Just value@(Object res) -> do
                     case rpcm of
-                      TorrentGet        -> pure res
+                      TorrentGet        -> pure value
                       TorrentAdd        -> added res
                       SessionGet        -> rawSessionUpdate res
                       SessionStats      ->  undefined
-                      PortTest          -> pure res
-                      BlocklistUpdate   -> pure res
-                      FreeSpace         -> pure res
-                      TorrentRenamePath -> pure res
-                      _                 -> pure undefined
+                      PortTest          -> pure value
+                      BlocklistUpdate   -> pure value
+                      FreeSpace         -> pure value
+                      TorrentRenamePath -> pure value
+                      _                 -> pure Null
                 _ -> throwIO . TransmissionError $ TransmissionContext "arguments is not an Object" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
       | otherwise = throwIO . TransmissionError $ TransmissionContext ("Query failed with result " ++ show success) (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
-     added :: KeyMap Value -> Eff es (KeyMap Value)
+     added :: KeyMap Value -> Eff es Value
      added res = do
                    let item
                           | K.member (fromString "torrent-added") res = K.lookup (fromString "torrent-added") res
                           | K.member (fromString "torrent-duplicate") res = K.lookup (fromString "torrent-duplicate") res
                           | otherwise = Nothing
-                       result = maybe K.empty (\(Object i) -> K.singleton ((\(A.String s) -> fromText s) . fromJust . K.lookup (fromString "id") $ i) (Object i)) item
+                       result = fromMaybe Null item
                    pure result
 
 examineBody (Done _ r) _ query response = logInfo_ (T.pack $ "Error:\n" ++ "Request: " ++ show query ++ "\n" ++ "HTTP Data: " ++  show response) >> error ("response is not an Object: " ++ show r)
 
 rawSessionUpdate :: a
 rawSessionUpdate = undefined
+
+valueInsert :: ToJSON a => String -> a -> Value -> Value
+valueInsert key value (Object km ) = Object . K.insert (fromString key) (toJSON value) $ km
+valueInsert key value Null = Object . K.singleton (fromString key) $ toJSON value
+valueInsert key value v = error (show v ++ " is not an Object and not Null, cannot insert value " ++ (show . toJSON $ value) ++ " for key " ++ key)

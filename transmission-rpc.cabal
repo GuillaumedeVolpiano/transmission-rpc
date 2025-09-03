@@ -71,8 +71,8 @@ library
   -- Modules included in this library but not exported.
   other-modules:
     Transmission.RPC.Constants
-    Transmission.RPC.Utils
     Transmission.RPC.Errors
+    Transmission.RPC.Utils
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -81,8 +81,8 @@ library
   -- todo : switch from attoparsec to flatparse
   build-depends:
     , aeson                 ^>=2.2.3.0
-    , attoparsec ^>=0.14.4
-    , attoparsec-aeson ^>=2.2.2.0
+    , attoparsec            ^>=0.14.4
+    , attoparsec-aeson      ^>=2.2.2.0
     , base                  ^>=4.21.0.0
     , bytestring            ^>=0.12.2.0
     , case-insensitive      ^>=1.2.1.0
@@ -94,7 +94,9 @@ library
     , log-effectful         ^>=1.0.1.0
     , monad-time-effectful  ^>=1.0.0.0
     , text                  ^>=2.1.2
+    , unordered-containers  ^>=0.2.20
     , utf8-string           ^>=1.0.2
+    , vector ^>=0.13.2.0
     , wreq-effectful        ^>=0.1.1.1
 
   -- Directories containing source files.

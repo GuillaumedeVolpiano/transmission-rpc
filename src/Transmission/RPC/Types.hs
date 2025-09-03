@@ -15,6 +15,7 @@ module Transmission.RPC.Types
   , getURI
   , getSession
   , getOpts
+  , getProtocolVersion
 
   -- ** Client builder
   , newClient
@@ -27,6 +28,9 @@ module Transmission.RPC.Types
   , RPCMethod(..)
 
   , Torrent
+
+  , JSONTypes (..)
+  , Args (Args)
 
  )
 where
@@ -42,6 +46,7 @@ data Client = Client {
                        getURI     :: URI
                      , getSession :: Session
                      , getOpts    :: Options
+                     , getProtocolVersion :: Int
                      }
 
 data Scheme = HTTP | HTTPS deriving (Show, Read)
@@ -60,13 +65,20 @@ type Timeout = Maybe Int
 type Label = String
 type ID = Int
 
-data RPCMethod = TorrentAdd | TorrentGet | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = TorrentAdd | TorrentGet | TorrentRemove | TorrentStart | TorrentStartNow | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+
+data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
+
+data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
 
 type Torrent = KeyMap Value
 
 instance ToJSON RPCMethod where
   toJSON TorrentAdd        = toJSON "torrent-add"
   toJSON TorrentGet        = toJSON "torrent-get"
+  toJSON TorrentRemove     = toJSON "torrent-remove"
+  toJSON TorrentStart      = toJSON "torrent-start"
+  toJSON TorrentStartNow   = toJSON "torrent-start-now"
   toJSON SessionGet        = toJSON "session-get"
   toJSON SessionStats      = toJSON "session-stats"
   toJSON PortTest          = toJSON "port-test"
@@ -74,5 +86,5 @@ instance ToJSON RPCMethod where
   toJSON FreeSpace         = toJSON "free-space"
   toJSON TorrentRenamePath = toJSON "torrent-rename-path"
 
-newClient :: URI -> Session -> Options -> Client
+newClient :: URI -> Session -> Options -> Int -> Client
 newClient = Client

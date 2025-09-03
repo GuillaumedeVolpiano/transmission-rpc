@@ -19,7 +19,7 @@ data TransmissionError = TransmissionAuthError TransmissionContext
 
 data TransmissionContext = TransmissionContext {
                                              message :: String
-                                           , method :: Maybe RPCMethod
+                                           , usedMethod :: Maybe RPCMethod
                                            , argument :: Maybe Value
                                            , jsonResponse :: Maybe Value
                                            , rawResponse :: Maybe (Response L.ByteString)
