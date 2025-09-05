@@ -15,13 +15,15 @@ module Transmission.RPC.Client (
   , reannounceTorrent
   , getTorrent
   , getTorrents
+  , getRecentlyActiveTorrents
   )
 where
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
 import           Data.Aeson                      (ToJSON,
                                                   Value (Array, Null, Number, Object),
-                                                  object, toJSON)
+                                                  object, toJSON, fromJSON)
+import qualified Data.Aeson as A (Value(String), Result(..))
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
 import qualified Data.Aeson.KeyMap               as K (insert, lookup, member,
@@ -35,7 +37,7 @@ import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
 import           Data.Maybe                      (catMaybes, fromMaybe,
                                                   mapMaybe)
-import qualified Data.Text                       as T (pack)
+import qualified Data.Text                       as T (pack, unpack)
 import qualified Data.Vector                     as V (toList)
 import           Effectful                       (Eff, (:>))
 import           Effectful.Error.Static          (HasCallStack)
@@ -59,10 +61,10 @@ import           Transmission.RPC.Constants      (defaultTimeout,
                                                   sessionIdHeaderName)
 import           Transmission.RPC.Errors         (TransmissionContext (..),
                                                   TransmissionError (..))
-import           Transmission.RPC.Types          (Client (..), ID, Label,
+import           Transmission.RPC.Types          (Client (..), ID (..), Label,
                                                   RPCMethod (..), Timeout,
                                                   Torrent, TorrentRef, getOpts,
-                                                  getSession, getURI, newClient)
+                                                  getSession, getURI, newClient, IDs (..))
 import           Transmission.RPC.Utils          (getTorrentArguments,
                                                   maybeJSON, readTorrent)
 
@@ -89,33 +91,34 @@ addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit p
 
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
 -- transmission daemon if Bool is True
-deleteTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Bool -> Timeout -> Eff es ()
+deleteTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
 deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [(fromString "delete-local-data", toJSON deleteData)]) (Just ids) True
 
 -- | Starttorrent(s) with provided id(s)
-startTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Bool -> Timeout -> Eff es ()
+startTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
 startTorrent ids bypassQueue = void . request (if bypassQueue then TorrentStartNow else TorrentStart) Nothing (Just ids) True
 
 -- | Start all torrents respecting the queue order
 startAll :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
 startAll bypassQueue timeout = do
   let method = if bypassQueue then TorrentStartNow else TorrentStart
-      extractInt Nothing = Nothing
-      extractInt (Just (Number n)) = Just . round $ n
-      extractInt (Just v) = error ("Value " ++ show v ++ " is not a number")
-  ids <- mapMaybe (extractInt . K.lookup (fromString "id")) <$> getTorrents Nothing (Just []) Nothing
+      extractID Nothing = Nothing
+      extractID (Just (Number n)) = Just . ID $ round n
+      extractID (Just (A.String s)) = Just . Hash . T.unpack $ s
+      extractID (Just v) = error ("Value " ++ show v ++ " is not a number")
+  ids <- IDs . mapMaybe (extractID . K.lookup (fromString "id")) <$> getTorrents Nothing (Just []) Nothing
   void . request method Nothing (Just ids) True $ timeout
 
 -- | Stop torrent(s) with provided id(s)
-stopTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+stopTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 stopTorrent ids = void . request TorrentStop Nothing (Just ids) True
 
 -- | Verify torrent(s) with provided id(s)
-verifyTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+verifyTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 verifyTorrent ids = void . request TorrentVerify Nothing (Just ids) True
 
 -- | Reannounce torrent(s) with provided id(s)
-reannounceTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => [ID] -> Timeout -> Eff es ()
+reannounceTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 
 -- | Get information for torrent with provided id. arguments contains a list of field names to be returned, when arguments=None (default), all fields are requested. See the Torrent class for more information.
@@ -129,19 +132,16 @@ reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 --            but is only ~0.2s if to fetch 6 fields.
 getTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => ID -> Maybe [String] -> Timeout -> Eff es Torrent
 getTorrent iD fields timeout = do
-  torrents <- getTorrents (Just [iD]) fields timeout
+  torrents <- getTorrents (Just . IDs $ [iD]) fields timeout
   case torrents of
     [] -> throwIO . TransmissionError $ TransmissionContext "No torrent returned" (Just TorrentGet) Nothing Nothing Nothing Nothing
     [t] -> pure t
     _ -> throwIO . TransmissionError $ TransmissionContext ("Received more than one torrent: " ++ show torrents) (Just TorrentGet) Nothing Nothing Nothing Nothing
 
 -- | Get information for torrents with provided ids. For more information see Client.get_torrent().
-getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [ID] -> Maybe [String] -> Timeout -> Eff es [Torrent]
+getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [String] -> Timeout -> Eff es [Torrent]
 getTorrents ids fields timeout = do
-  protocolVersion <- asks getProtocolVersion
-  let args = maybe (toJSON . getTorrentArguments $ protocolVersion) (toJSON . S.fromList . ("id":) . ("hashstring" :)) fields
-      extractValues (Object v) = v
-      extractValues v          = error (show v ++ "is not a keymap")
+  args <- buildArguments fields
   response <- request TorrentGet (Just . object $ [(fromString "fields", args)]) ids False timeout
   let res = case response of
               Object r -> r
@@ -151,7 +151,35 @@ getTorrents ids fields timeout = do
                                        Just (Array tors) -> pure . map extractValues . V.toList $ tors
                                        Just _ -> throwIO . TransmissionError $ TransmissionContext "torrent field does not contain an Array" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
 
+-- | Get information for torrents for recently active torrent. If you want to get recently-removed torrents. you should use this method.
+-- Returns a list of active torrents and a list of ids of recently removed torrents
+getRecentlyActiveTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [String] -> Timeout -> Eff es ([Torrent], IDs)
+getRecentlyActiveTorrents fields timeout = do
+  args <- buildArguments fields
+  result <- request TorrentGet (Just . object $ [(fromString "fields", args)]) (Just RecentlyActive) False timeout
+  let res = case result of
+              Object r -> r
+              _ -> error (show result ++ "is not an object")
+      tors = case K.lookup (fromString "torrents") res of
+               Nothing -> []
+               Just (Array a) -> map extractValues . V.toList $ a
+               Just _ -> error ("torrent field does not contain an Array " ++ show res)
+      removed = case K.lookup (fromString "removed") res of 
+                  Nothing -> []
+                  Just a@(Array _) -> case fromJSON a of 
+                                        A.Error s -> error s
+                                        A.Success b -> b
+                  Just _ -> error ("removed field does not contain an Array " ++ show res)
+  pure (tors, IDs removed)
+
 -- Utility functions
+
+extractValues :: Value -> KeyMap Value
+extractValues (Object v) = v
+extractValues v = error (show v ++ "is not an object")
+
+buildArguments :: (Reader Client :> es) => Maybe [String] -> Eff es Value
+buildArguments fields = asks getProtocolVersion >>= \protocolVersion -> pure . maybe (toJSON . getTorrentArguments $ protocolVersion) (toJSON . S.fromList . ("id" :) . ("hashstring" :)) $ fields
 
 getSessionId :: Wreq :> es => String -> Session -> Eff es ByteString
 getSessionId url sesh = do
@@ -164,9 +192,9 @@ getSessionId url sesh = do
                 sessionId failGet
 
 
-request :: (HasCallStack, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe [ID] -> Bool -> Timeout -> Eff es Value
+request :: (HasCallStack, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
 request _ _ Nothing True _ = error "request requires ids"
-request _ _ (Just []) True _ = error "request requires ids"
+request _ _ (Just (IDs [])) True _ = error "request requires ids"
 request rpcm args ids _ timeout = do
   let args' = maybe id (valueInsert "ids") ids . fromMaybe Null $ args
       query = object [(fromString "method", toJSON rpcm), (fromString "arguments", args')]

@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Transmission.RPC.Types
   (
   -- * Client
@@ -22,7 +23,6 @@ module Transmission.RPC.Types
 
   -- * Torrent reference
   , TorrentRef (..)
-  , ID
 
   , Label
   , RPCMethod(..)
@@ -32,15 +32,19 @@ module Transmission.RPC.Types
   , JSONTypes (..)
   , Args (Args)
 
+  , ID(..)
+  , IDs(..)
+
  )
 where
 
-import           Data.Aeson              (ToJSON, Value, toJSON)
+import           Data.Aeson              (ToJSON, Value, toJSON, FromJSON)
 import           Data.Aeson.KeyMap       (KeyMap)
 import           Data.ByteString         (ByteString)
 import           Effectful.FileSystem.IO (Handle)
 import           Effectful.Wreq          (Options)
 import           Effectful.Wreq.Session  (Session)
+import GHC.Generics (Generic)
 
 data Client = Client {
                        getURI     :: URI
@@ -55,6 +59,9 @@ data TorrentRef = TorrentURI URI | Binary Handle | TorrentContent ByteString | P
 
 data TorrentObject = TorrentObject deriving Show
 
+data ID = ID Int | Hash String deriving (Show, Generic)
+data IDs = IDs [ID] | RecentlyActive deriving (Show, Generic)
+
 type URI = String
 type Username = Maybe String
 type Password = Maybe String
@@ -63,7 +70,6 @@ type Port = Int
 type Path = String
 type Timeout = Maybe Int
 type Label = String
-type ID = Int
 
 data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
@@ -88,6 +94,18 @@ instance ToJSON RPCMethod where
   toJSON BlocklistUpdate   = toJSON "blocklist-update"
   toJSON FreeSpace         = toJSON "free-space"
   toJSON TorrentRenamePath = toJSON "torrent-rename-path"
+
+instance ToJSON ID where
+  toJSON (ID i) = toJSON i
+  toJSON (Hash s) = toJSON s
+
+instance FromJSON ID
+
+instance ToJSON IDs where
+  toJSON (IDs ids) = toJSON ids
+  toJSON RecentlyActive = toJSON "recently-active"
+
+instance FromJSON IDs
 
 newClient :: URI -> Session -> Options -> Int -> Client
 newClient = Client
