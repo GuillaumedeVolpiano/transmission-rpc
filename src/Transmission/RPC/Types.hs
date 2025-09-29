@@ -27,8 +27,6 @@ module Transmission.RPC.Types
   , Label
   , RPCMethod(..)
 
-  , Torrent
-
   , JSONTypes (..)
   , Args (Args)
 
@@ -38,8 +36,7 @@ module Transmission.RPC.Types
  )
 where
 
-import           Data.Aeson              (ToJSON, Value, toJSON, FromJSON)
-import           Data.Aeson.KeyMap       (KeyMap)
+import           Data.Aeson              (ToJSON, toJSON, FromJSON)
 import           Data.ByteString         (ByteString)
 import           Effectful.FileSystem.IO (Handle)
 import           Effectful.Wreq          (Options)
@@ -76,8 +73,6 @@ data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | T
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
-
-type Torrent = KeyMap Value
 
 instance ToJSON RPCMethod where
   toJSON TorrentAdd        = toJSON "torrent-add"
