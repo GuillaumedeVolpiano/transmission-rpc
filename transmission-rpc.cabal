@@ -66,6 +66,8 @@ library
   -- Modules exported by the library.
   exposed-modules:
     Transmission.RPC.Client
+    Transmission.RPC.Enum
+    Transmission.RPC.Torrent
     Transmission.RPC.Types
 
   -- Modules included in this library but not exported.
@@ -94,9 +96,10 @@ library
     , log-effectful         ^>=1.0.1.0
     , monad-time-effectful  ^>=1.0.0.0
     , text                  ^>=2.1.2
+    , time                  ^>=1.14
     , unordered-containers  ^>=0.2.20
     , utf8-string           ^>=1.0.2
-    , vector ^>=0.13.2.0
+    , vector                ^>=0.13.2.0
     , wreq-effectful        ^>=0.1.1.1
 
   -- Directories containing source files.
