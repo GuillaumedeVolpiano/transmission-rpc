@@ -36,17 +36,17 @@ module Transmission.RPC.Types
  )
 where
 
-import           Data.Aeson              (ToJSON, toJSON, FromJSON)
+import           Data.Aeson              (FromJSON, ToJSON, toJSON)
 import           Data.ByteString         (ByteString)
 import           Effectful.FileSystem.IO (Handle)
 import           Effectful.Wreq          (Options)
 import           Effectful.Wreq.Session  (Session)
-import GHC.Generics (Generic)
+import           GHC.Generics            (Generic)
 
 data Client = Client {
-                       getURI     :: URI
-                     , getSession :: Session
-                     , getOpts    :: Options
+                       getURI             :: URI
+                     , getSession         :: Session
+                     , getOpts            :: Options
                      , getProtocolVersion :: Int
                      }
 
@@ -68,7 +68,7 @@ type Path = String
 type Timeout = Maybe Int
 type Label = String
 
-data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
@@ -79,6 +79,7 @@ instance ToJSON RPCMethod where
   toJSON TorrentGet        = toJSON "torrent-get"
   toJSON TorrentReannounce = toJSON "torrent-reannounce"
   toJSON TorrentRemove     = toJSON "torrent-remove"
+  toJSON TorrentSet        = toJSON "torrent-set"
   toJSON TorrentStart      = toJSON "torrent-start"
   toJSON TorrentStartNow   = toJSON "torrent-start-now"
   toJSON TorrentStop       = toJSON "torrent-stop"
@@ -91,13 +92,13 @@ instance ToJSON RPCMethod where
   toJSON TorrentRenamePath = toJSON "torrent-rename-path"
 
 instance ToJSON ID where
-  toJSON (ID i) = toJSON i
+  toJSON (ID i)   = toJSON i
   toJSON (Hash s) = toJSON s
 
 instance FromJSON ID
 
 instance ToJSON IDs where
-  toJSON (IDs ids) = toJSON ids
+  toJSON (IDs ids)      = toJSON ids
   toJSON RecentlyActive = toJSON "recently-active"
 
 instance FromJSON IDs
