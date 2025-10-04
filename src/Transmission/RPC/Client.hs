@@ -1,5 +1,6 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TypeOperators    #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators     #-}
 
 module Transmission.RPC.Client (
   -- * Reexports from Transmission.RPC.Types
@@ -16,13 +17,14 @@ module Transmission.RPC.Client (
   , getTorrent
   , getTorrents
   , getRecentlyActiveTorrents
+  , changeTorrents
   )
 where
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
 import           Data.Aeson                      (ToJSON,
                                                   Value (Array, Null, Object),
-                                                  fromJSON, object, toJSON)
+                                                  fromJSON, object, toJSON, (.=), Key)
 import qualified Data.Aeson                      as A (Result (..))
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
@@ -36,6 +38,7 @@ import           Data.Fixed                      (E3, Fixed, showFixed)
 import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
 import           Data.Maybe                      (catMaybes, fromMaybe)
+import           Data.Text                       (Text)
 import qualified Data.Text                       as T (pack)
 import qualified Data.Vector                     as V (toList)
 import           Effectful                       (Eff, (:>))
@@ -56,8 +59,9 @@ import           Network.HTTP.Client             (HttpException (HttpExceptionRe
                                                   defaultManagerSettings,
                                                   managerResponseTimeout,
                                                   responseTimeoutMicro)
-import           Transmission.RPC.Constants      (defaultTimeout,
+import           Transmission.RPC.Constants      (Priority, defaultTimeout,
                                                   sessionIdHeaderName)
+import           Transmission.RPC.Enum           (IdleMode, RatioLimitMode)
 import           Transmission.RPC.Errors         (TransmissionContext (..),
                                                   TransmissionError (..))
 import           Transmission.RPC.Torrent        (Torrent, iD, mkTorrent)
@@ -84,7 +88,7 @@ fromUrl url opts timeout =  do
 
 
 -- | Add a torrent to the transfer list
-addTorrent :: (FileSystem :> es, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe String -> Maybe [Label] -> Maybe Int -> Eff es Torrent
+addTorrent :: (FileSystem :> es, Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
 addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority= do
                                      torrentData <- readTorrent tref
                                      let args = Just . object . (torrentData :) . catMaybes $ [maybeJSON ("download-dir", downloadDir), maybeJSON ("files-unwanted", filesUnwanted), maybeJSON ("files-wanted", filesWanted), maybeJSON ("paused", paused), maybeJSON ("peerLimit", peerLimit), maybeJSON ("priority-high", priorityHigh), maybeJSON ("priority-low", priorityLow), maybeJSON ("priority-normal", priorityNormal), maybeJSON ("cookies", cookies), maybeJSON ("labels", labels), maybeJSON ("bandwidthPriority", bandwidthPriority)]
@@ -93,7 +97,7 @@ addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit p
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
 -- transmission daemon if Bool is True
 deleteTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
-deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [(fromString "delete-local-data", toJSON deleteData)]) (Just ids) True
+deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [("delete-local-data", toJSON deleteData)]) (Just ids) True
 
 -- | Starttorrent(s) with provided id(s)
 startTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
@@ -127,7 +131,7 @@ reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 --
 --            For example, fetch all fields from transmission daemon with 1500 torrents would take ~5s,
 --            but is only ~0.2s if to fetch 6 fields.
-getTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => ID -> Maybe [String] -> Timeout -> Eff es Torrent
+getTorrent :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => ID -> Maybe [Text] -> Timeout -> Eff es Torrent
 getTorrent toID fields timeout = do
   torrents <- getTorrents (Just . IDs $ [toID]) fields timeout
   case torrents of
@@ -136,32 +140,32 @@ getTorrent toID fields timeout = do
     _ -> throwIO . TransmissionError $ TransmissionContext ("Received more than one torrent: " ++ show torrents) (Just TorrentGet) Nothing Nothing Nothing Nothing
 
 -- | Get information for torrents with provided ids. For more information see Client.get_torrent().
-getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [String] -> Timeout -> Eff es [Torrent]
+getTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [Text] -> Timeout -> Eff es [Torrent]
 getTorrents ids fields timeout = do
   args <- buildArguments fields
-  response <- request TorrentGet (Just . object $ [(fromString "fields", args)]) ids False timeout
+  response <- request TorrentGet (Just . object $ [("fields", args)]) ids False timeout
   let res = case response of
               Object r -> r
               _        -> error (show response ++ "is not an object")
-  case K.lookup (fromString "torrents") res of
-                                       Nothing -> throwIO . TransmissionError $ TransmissionContext "Response has no torrent field" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
+  case K.lookup "torrents" res of
+                                       Nothing -> throwIO . TransmissionError $ TransmissionContext "Response has no torrent field" (Just TorrentGet) (Just . object $ [("fields", args)]) (Just response) Nothing Nothing
                                        Just (Array tors) -> pure . map mkTorrent . V.toList $ tors
-                                       Just _ -> throwIO . TransmissionError $ TransmissionContext "torrent field does not contain an Array" (Just TorrentGet) (Just . object $ [(fromString "fields", args)]) (Just response) Nothing Nothing
+                                       Just _ -> throwIO . TransmissionError $ TransmissionContext "torrent field does not contain an Array" (Just TorrentGet) (Just . object $ [("fields", args)]) (Just response) Nothing Nothing
 
 -- | Get information for torrents for recently active torrent. If you want to get recently-removed torrents. you should use this method.
 -- Returns a list of active torrents and a list of ids of recently removed torrents
-getRecentlyActiveTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [String] -> Timeout -> Eff es ([Torrent], IDs)
+getRecentlyActiveTorrents :: (Wreq :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es ([Torrent], IDs)
 getRecentlyActiveTorrents fields timeout = do
   args <- buildArguments fields
-  result <- request TorrentGet (Just . object $ [(fromString "fields", args)]) (Just RecentlyActive) False timeout
+  result <- request TorrentGet (Just . object $ [("fields", args)]) (Just RecentlyActive) False timeout
   let res = case result of
               Object r -> r
               _        -> error (show result ++ "is not an object")
-      tors = case K.lookup (fromString "torrents") res of
+      tors = case K.lookup "torrents" res of
                Nothing -> []
                Just (Array a) -> map mkTorrent . V.toList $ a
                Just _ -> error ("torrent field does not contain an Array " ++ show res)
-      removed = case K.lookup (fromString "removed") res of
+      removed = case K.lookup "removed" res of
                   Nothing -> []
                   Just a@(Array _) -> case fromJSON a of
                                         A.Error s   -> error s
@@ -169,9 +173,23 @@ getRecentlyActiveTorrents fields timeout = do
                   Just _ -> error ("removed field does not contain an Array " ++ show res)
   pure (tors, IDs removed)
 
+-- | change torrent(s) parameters for the torrents with the supplied id(s)
+changeTorrents :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Maybe Priority -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe FilePath -> Maybe Int -> Maybe [Priority] -> Maybe [Priority] -> Maybe [Priority] -> Maybe Int -> Maybe Int -> Maybe IdleMode -> Maybe Rational -> Maybe RatioLimitMode -> Maybe [Text] -> Maybe Text -> Maybe Text -> Maybe [[Text]] -> Maybe [(Int, Text)] -> Maybe [Int] -> [(Key, Value)] -> Eff es ()
+changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploadLimit uploadLimited filesUnwanted filesWanted honorsSessionsLimits location peerLimit priorityHigh priorityLow priorityNormal queuePosition
+  seedIdleLimit seedIdleMode seedRatioLimit seedRatioMode trackerAdd labels group trackerList trackerReplace trackerRemove additionalArgs = do
+    let args = (additionalArgs ++) . catMaybes $ [("bandwidthPriority" .=) <$> bandwidthPriority, ("downloadLimit" .=) <$> downloadLimit, ("downloadLimited" .=) <$> downloadLimited, ("uploadLimit" .=) <$> uploadLimit,
+                                    ("uploadLimited" .=) <$> uploadLimited, ("files-unwanted" .=) <$> filesUnwanted, ("files-wanted" .=) <$> filesWanted, ("honorsSessionsLimits" .=) <$> honorsSessionsLimits,
+                                    ("location" .=) <$> location, ("peer-limit" .=) <$> peerLimit, ("priority-high" .=) <$> priorityHigh, ("priority-low" .=) <$> priorityLow, ("priority-normal" .=) <$> priorityNormal,
+                                    ("queuePosition" .=) <$> queuePosition, ("seedIdleLimit".=) <$> seedIdleLimit, ("seedIdleMode" .=) <$> seedIdleMode, ("seedRatioLimit" .=) <$> seedRatioLimit,
+                                    ("seedRatioMode" .=) <$> seedRatioMode, ("trackerAdd" .=) <$> trackerAdd, ("labels" .=) <$> labels, ("group" .=) <$> group, ("trackerList" .=) <$> trackerList,
+                                    ("trackerReplace" .=) <$> trackerReplace, ("trackerRemove" .=) <$> trackerRemove]
+
+    if null args then error "No arguments to set"
+                 else void $ request TorrentSet (Just . object $ args) (Just ids) True timeout
+
 -- Utility functions
 
-buildArguments :: (Reader Client :> es) => Maybe [String] -> Eff es Value
+buildArguments :: (Reader Client :> es) => Maybe [Text] -> Eff es Value
 buildArguments fields = asks getProtocolVersion >>= \protocolVersion -> pure . maybe (toJSON . getTorrentArguments $ protocolVersion) (toJSON . S.fromList . ("id" :) . ("hashstring" :)) $ fields
 
 getSessionId :: Wreq :> es => String -> Session -> Eff es ByteString
@@ -190,7 +208,7 @@ request _ _ Nothing True _ = error "request requires ids"
 request _ _ (Just (IDs [])) True _ = error "request requires ids"
 request rpcm args ids _ timeout = do
   let args' = maybe id (valueInsert "ids") ids . fromMaybe Null $ args
-      query = object [(fromString "method", toJSON rpcm), (fromString "arguments", args')]
+      query = object [("method", toJSON rpcm), ("arguments", args')]
   sesh <- asks getSession
   opts <- asks getOpts
   let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
@@ -204,13 +222,13 @@ request rpcm args ids _ timeout = do
 
 examineBody :: Log :> es => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es Value
 examineBody (Fail _ _ e) rpcm query response = logInfo_ (T.pack $ "Error:\n" ++ "Request: " ++ show query ++ "\n" ++ "HTTP Data: " ++  show response) >> throwIO (TransmissionError (TransmissionContext ("failed to parse response as JSON:\n" ++ show e) (Just rpcm ) (Just query) Nothing (Just response) Nothing))
-examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.lookup (fromString "result") bodyMap of
+examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.lookup "result" bodyMap of
                                         Nothing -> throwIO . TransmissionError $ TransmissionContext "Query failed, response data missing result:\n" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
                                         Just result -> checkSuccess result
    where
      checkSuccess success
-       | success == toJSON "success" =
-              case K.lookup (fromString "arguments") bodyMap of
+       | success == toJSON ("success" :: String) =
+              case K.lookup "arguments" bodyMap of
                 Just value@(Object res) -> do
                     case rpcm of
                       TorrentGet        -> pure value
@@ -227,8 +245,8 @@ examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.look
      added :: KeyMap Value -> Eff es Value
      added res = do
                    let item
-                          | K.member (fromString "torrent-added") res = K.lookup (fromString "torrent-added") res
-                          | K.member (fromString "torrent-duplicate") res = K.lookup (fromString "torrent-duplicate") res
+                          | K.member "torrent-added" res = K.lookup "torrent-added" res
+                          | K.member "torrent-duplicate" res = K.lookup "torrent-duplicate" res
                           | otherwise = Nothing
                        result = fromMaybe Null item
                    pure result
