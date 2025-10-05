@@ -18,6 +18,7 @@ module Transmission.RPC.Client (
   , getTorrents
   , getRecentlyActiveTorrents
   , changeTorrents
+  , moveTorrentData
   )
 where
 import           Control.Lens                    ((.~))
@@ -186,6 +187,13 @@ changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploa
 
     if null args then error "No arguments to set"
                  else void $ request TorrentSet (Just . object $ args) (Just ids) True timeout
+
+
+-- | Move torrent data to a new location
+moveTorrentData :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> FilePath -> Timeout -> Bool -> Eff es ()
+moveTorrentData ids location timeout move = do
+  let args = object ["location" .= location, "move" .= move]
+  void $ request TorrentSetLocation (Just args) (Just ids) True timeout
 
 -- Utility functions
 
