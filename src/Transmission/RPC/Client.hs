@@ -19,13 +19,14 @@ module Transmission.RPC.Client (
   , getRecentlyActiveTorrents
   , changeTorrents
   , moveTorrentData
+  , renameTorrentPath
   )
 where
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
-import           Data.Aeson                      (ToJSON,
+import           Data.Aeson                      (Key, ToJSON,
                                                   Value (Array, Null, Object),
-                                                  fromJSON, object, toJSON, (.=), Key)
+                                                  fromJSON, object, toJSON, (.=))
 import qualified Data.Aeson                      as A (Result (..))
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
@@ -38,7 +39,9 @@ import qualified Data.ByteString.Lazy            as L (ByteString)
 import           Data.Fixed                      (E3, Fixed, showFixed)
 import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
-import           Data.Maybe                      (catMaybes, fromMaybe)
+import           Data.Map                        ((!), Map)
+import           Data.Maybe                      (catMaybes,
+                                                  fromMaybe)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T (pack)
 import qualified Data.Vector                     as V (toList)
@@ -194,6 +197,14 @@ moveTorrentData :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => I
 moveTorrentData ids location timeout move = do
   let args = object ["location" .= location, "move" .= move]
   void $ request TorrentSetLocation (Just args) (Just ids) True timeout
+
+-- | Rename the path of a torrent, doesn't move it.
+renameTorrentPath :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => ID -> FilePath -> Text -> Timeout -> Eff es (Text, Text)
+renameTorrentPath toID location name timeout = do
+  result <- (fromJSON :: Value -> A.Result (Map Text Text)) <$> request TorrentRenamePath (Just . object $ ["path" .= location, "name" .= name]) (Just . IDs $ [toID]) True timeout 
+  case result of
+    A.Error s -> error s
+    A.Success km -> pure (km ! "path", km ! "name")
 
 -- Utility functions
 

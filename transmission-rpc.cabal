@@ -88,6 +88,7 @@ library
     , base                  ^>=4.21.0.0
     , bytestring            ^>=0.12.2.0
     , case-insensitive      ^>=1.2.1.0
+    , containers            ^>=0.7
     , effectful             ^>=2.5.1.0
     , effectful-core        ^>=2.5.1.0
     , http-client           ^>=0.7.19
