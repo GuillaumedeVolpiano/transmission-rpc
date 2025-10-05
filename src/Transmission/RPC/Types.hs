@@ -68,28 +68,29 @@ type Path = String
 type Timeout = Maybe Int
 type Label = String
 
-data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
 
 instance ToJSON RPCMethod where
-  toJSON TorrentAdd        = toJSON "torrent-add"
-  toJSON TorrentGet        = toJSON "torrent-get"
-  toJSON TorrentReannounce = toJSON "torrent-reannounce"
-  toJSON TorrentRemove     = toJSON "torrent-remove"
-  toJSON TorrentSet        = toJSON "torrent-set"
-  toJSON TorrentStart      = toJSON "torrent-start"
-  toJSON TorrentStartNow   = toJSON "torrent-start-now"
-  toJSON TorrentStop       = toJSON "torrent-stop"
-  toJSON TorrentVerify     = toJSON "torrent-verify"
-  toJSON SessionGet        = toJSON "session-get"
-  toJSON SessionStats      = toJSON "session-stats"
-  toJSON PortTest          = toJSON "port-test"
-  toJSON BlocklistUpdate   = toJSON "blocklist-update"
-  toJSON FreeSpace         = toJSON "free-space"
-  toJSON TorrentRenamePath = toJSON "torrent-rename-path"
+  toJSON TorrentAdd         = toJSON "torrent-add"
+  toJSON TorrentGet         = toJSON "torrent-get"
+  toJSON TorrentReannounce  = toJSON "torrent-reannounce"
+  toJSON TorrentRemove      = toJSON "torrent-remove"
+  toJSON TorrentSet         = toJSON "torrent-set"
+  toJSON TorrentSetLocation = toJSON "torrent-set-location"
+  toJSON TorrentStart       = toJSON "torrent-start"
+  toJSON TorrentStartNow    = toJSON "torrent-start-now"
+  toJSON TorrentStop        = toJSON "torrent-stop"
+  toJSON TorrentVerify      = toJSON "torrent-verify"
+  toJSON SessionGet         = toJSON "session-get"
+  toJSON SessionStats       = toJSON "session-stats"
+  toJSON PortTest           = toJSON "port-test"
+  toJSON BlocklistUpdate    = toJSON "blocklist-update"
+  toJSON FreeSpace          = toJSON "free-space"
+  toJSON TorrentRenamePath  = toJSON "torrent-rename-path"
 
 instance ToJSON ID where
   toJSON (ID i)   = toJSON i
