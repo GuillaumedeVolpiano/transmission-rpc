@@ -68,13 +68,14 @@ type Path = String
 type Timeout = Maybe Int
 type Label = String
 
-data RPCMethod = TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = QueueMoveTop | TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
 
 instance ToJSON RPCMethod where
+  toJSON QueueMoveTop       = toJSON "queue-move-top"
   toJSON TorrentAdd         = toJSON "torrent-add"
   toJSON TorrentGet         = toJSON "torrent-get"
   toJSON TorrentReannounce  = toJSON "torrent-reannounce"
