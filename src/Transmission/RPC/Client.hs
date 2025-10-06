@@ -20,6 +20,7 @@ module Transmission.RPC.Client (
   , changeTorrents
   , moveTorrentData
   , renameTorrentPath
+  , queueTop
   )
 where
 import           Control.Lens                    ((.~))
@@ -205,6 +206,10 @@ renameTorrentPath toID location name timeout = do
   case result of
     A.Error s -> error s
     A.Success km -> pure (km ! "path", km ! "name")
+
+-- | Move transfer to the top of the queue
+queueTop :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueTop ids timeout = void $ request QueueMoveTop Nothing (Just ids) True timeout
 
 -- Utility functions
 
