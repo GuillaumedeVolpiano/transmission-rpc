@@ -21,6 +21,9 @@ module Transmission.RPC.Client (
   , moveTorrentData
   , renameTorrentPath
   , queueTop
+  , queueBottom
+  , queueUp
+  , queueDown
   )
 where
 import           Control.Lens                    ((.~))
@@ -210,6 +213,18 @@ renameTorrentPath toID location name timeout = do
 -- | Move transfer to the top of the queue
 queueTop :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 queueTop ids timeout = void $ request QueueMoveTop Nothing (Just ids) True timeout
+
+-- | Move transfer to the bottom of the queue
+queueBottom :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueBottom ids timeout = void $ request QueueMoveBottom Nothing (Just ids) True timeout
+
+-- | Move transfer up in the queue
+queueUp :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueUp ids timeout = void $ request QueueMoveUp Nothing (Just ids) True timeout
+
+-- | Move transfer down in the queue
+queueDown :: (Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueDown ids timeout = void $ request QueueMoveDown Nothing (Just ids) True timeout
 
 -- Utility functions
 
