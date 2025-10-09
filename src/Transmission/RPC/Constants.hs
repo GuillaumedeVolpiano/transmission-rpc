@@ -1,4 +1,5 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Transmission.RPC.Constants
   (defaultTimeout
   , sessionIdHeaderName
@@ -6,14 +7,15 @@ module Transmission.RPC.Constants
   , Priority)
 where
 
+import           Data.Aeson             (FromJSON, ToJSON (toJSON),
+                                         Value (Number), withScientific)
+import           Data.Aeson.Types       (FromJSON (parseJSON), prependFailure)
 import           Data.ByteString        (ByteString)
 import           Data.ByteString.Char8  (pack)
 import           Data.CaseInsensitive   (CI, mk)
 import           Data.HashMap.Strict    (HashMap)
 import qualified Data.HashMap.Strict    as M (fromList)
 import           Transmission.RPC.Types (Args (Args), JSONTypes (..))
-import Data.Aeson (ToJSON (toJSON), Value (Number), FromJSON, withScientific)
-import Data.Aeson.Types (FromJSON(parseJSON), prependFailure)
 
 defaultTimeout :: Int
 defaultTimeout = 3000
@@ -21,9 +23,9 @@ defaultTimeout = 3000
 data Priority = Low | Normal | High deriving (Eq, Ord, Show)
 
 instance ToJSON Priority where
-  toJSON Low = Number (-1) 
+  toJSON Low    = Number (-1)
   toJSON Normal = Number 0
-  toJSON High = Number 1
+  toJSON High   = Number 1
 
 instance FromJSON Priority where
   parseJSON = withScientific "Priority" $ \case
@@ -31,7 +33,6 @@ instance FromJSON Priority where
                                                            0 -> pure Normal
                                                            1 -> pure High
                                                            x -> prependFailure "Parsing Priority failed: " (fail (show x ++ " is not a valid priority"))
-
 
 sessionIdHeaderName :: CI ByteString
 sessionIdHeaderName = mk . pack $ "X-Transmission-Session-Id"

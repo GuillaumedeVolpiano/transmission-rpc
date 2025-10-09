@@ -67,6 +67,7 @@ library
   exposed-modules:
     Transmission.RPC.Client
     Transmission.RPC.Enum
+    Transmission.RPC.Session
     Transmission.RPC.Torrent
     Transmission.RPC.Types
 
