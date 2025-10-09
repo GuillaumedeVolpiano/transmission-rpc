@@ -1,4 +1,8 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GADTs         #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Transmission.RPC.Types
   (
   -- * Client
@@ -17,7 +21,9 @@ module Transmission.RPC.Types
   , getSession
   , getOpts
   , getProtocolVersion
-
+  , getHttpSession
+  , getServerVersion
+  , getSemVerVersion
   -- ** Client builder
   , newClient
 
@@ -36,19 +42,28 @@ module Transmission.RPC.Types
  )
 where
 
-import           Data.Aeson              (FromJSON, ToJSON, toJSON)
-import           Data.ByteString         (ByteString)
-import           Effectful.FileSystem.IO (Handle)
-import           Effectful.Wreq          (Options)
-import           Effectful.Wreq.Session  (Session)
-import           GHC.Generics            (Generic)
+import           Data.Aeson               (FromJSON, ToJSON, toJSON)
+import           Data.ByteString          (ByteString)
+import           Data.Text                (Text)
+import           Effectful.FileSystem.IO  (Handle)
+import           Effectful.Prim.IORef     (IORef, newIORef)
+import           Effectful.Wreq           (Options)
+import           Effectful.Wreq.Session   (Session)
+import           GHC.Generics             (Generic)
+import Transmission.RPC.Session (emptySession)
+import qualified Transmission.RPC.Session as TS (Session)
+import Effectful (Eff, (:>))
+import Effectful.Internal.Monad (Prim)
 
-data Client = Client {
-                       getURI             :: URI
-                     , getSession         :: Session
-                     , getOpts            :: Options
-                     , getProtocolVersion :: Int
-                     }
+data Client where
+  Client :: {getURI :: URI,
+               getSession :: IORef TS.Session,
+               getHttpSession :: Session,
+               getOpts :: Options,
+               getProtocolVersion :: IORef Int,
+               getServerVersion :: IORef (Maybe Text),
+               getSemVerVersion :: IORef (Maybe Text)} ->
+              Client
 
 data Scheme = HTTP | HTTPS deriving (Show, Read)
 
@@ -75,26 +90,26 @@ data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray |
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
 
 instance ToJSON RPCMethod where
-  toJSON QueueMoveBottom    = toJSON "queue-move-bottom"
-  toJSON QueueMoveDown      = toJSON "queue-move-down"
-  toJSON QueueMoveTop       = toJSON "queue-move-top"
-  toJSON QueueMoveUp        = toJSON "queue-move-up"
-  toJSON TorrentAdd         = toJSON "torrent-add"
-  toJSON TorrentGet         = toJSON "torrent-get"
-  toJSON TorrentReannounce  = toJSON "torrent-reannounce"
-  toJSON TorrentRemove      = toJSON "torrent-remove"
-  toJSON TorrentSet         = toJSON "torrent-set"
-  toJSON TorrentSetLocation = toJSON "torrent-set-location"
-  toJSON TorrentStart       = toJSON "torrent-start"
-  toJSON TorrentStartNow    = toJSON "torrent-start-now"
-  toJSON TorrentStop        = toJSON "torrent-stop"
-  toJSON TorrentVerify      = toJSON "torrent-verify"
-  toJSON SessionGet         = toJSON "session-get"
-  toJSON SessionStats       = toJSON "session-stats"
-  toJSON PortTest           = toJSON "port-test"
-  toJSON BlocklistUpdate    = toJSON "blocklist-update"
-  toJSON FreeSpace          = toJSON "free-space"
-  toJSON TorrentRenamePath  = toJSON "torrent-rename-path"
+  toJSON QueueMoveBottom    = "queue-move-bottom"
+  toJSON QueueMoveDown      = "queue-move-down"
+  toJSON QueueMoveTop       = "queue-move-top"
+  toJSON QueueMoveUp        = "queue-move-up"
+  toJSON TorrentAdd         = "torrent-add"
+  toJSON TorrentGet         = "torrent-get"
+  toJSON TorrentReannounce  = "torrent-reannounce"
+  toJSON TorrentRemove      = "torrent-remove"
+  toJSON TorrentSet         = "torrent-set"
+  toJSON TorrentSetLocation = "torrent-set-location"
+  toJSON TorrentStart       = "torrent-start"
+  toJSON TorrentStartNow    = "torrent-start-now"
+  toJSON TorrentStop        = "torrent-stop"
+  toJSON TorrentVerify      = "torrent-verify"
+  toJSON SessionGet         = "session-get"
+  toJSON SessionStats       = "session-stats"
+  toJSON PortTest           = "port-test"
+  toJSON BlocklistUpdate    = "blocklist-update"
+  toJSON FreeSpace          = "free-space"
+  toJSON TorrentRenamePath  = "torrent-rename-path"
 
 instance ToJSON ID where
   toJSON (ID i)   = toJSON i
@@ -104,9 +119,14 @@ instance FromJSON ID
 
 instance ToJSON IDs where
   toJSON (IDs ids)      = toJSON ids
-  toJSON RecentlyActive = toJSON "recently-active"
+  toJSON RecentlyActive = "recently-active"
 
 instance FromJSON IDs
 
-newClient :: URI -> Session -> Options -> Int -> Client
-newClient = Client
+newClient :: (Prim :> es) => URI -> Session -> Options -> Int -> Eff es Client
+newClient uri session opts pv = do
+  sesh <- newIORef emptySession
+  pv' <- newIORef pv
+  srv <- newIORef Nothing
+  smv <- newIORef Nothing
+  pure $ Client uri sesh session opts pv' srv smv

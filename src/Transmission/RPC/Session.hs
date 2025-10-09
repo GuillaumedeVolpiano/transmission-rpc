@@ -10,9 +10,9 @@ module Transmission.RPC.Session
   altSpeedTimeEnabled,
   altSpeedTimeEnd,
   altSpeedUp,
-  blockListEnabled,
-  blockListSize,
-  blockListURL,
+  blocklistEnabled,
+  blocklistSize,
+  blocklistURL,
   cacheSizeMB,
   configDir,
   defaultTrackers,
@@ -67,6 +67,8 @@ module Transmission.RPC.Session
   sizeBytes,
   memoryUnits,
   memoryBytes,
+  emptySession,
+  modifySession
    )
 where
 import           Data.Aeson            (FromJSON, ToJSON, object, parseJSON,
@@ -75,6 +77,7 @@ import           Data.Aeson.Types      (toJSON)
 import           Data.Maybe            (catMaybes)
 import           Data.Text             (Text)
 import           Transmission.RPC.Enum (EncryptionMode)
+import Control.Applicative ((<|>))
 
 data Session where
   Session :: {
@@ -85,9 +88,9 @@ data Session where
                 altSpeedTimeEnabled :: Maybe Bool,
                 altSpeedTimeEnd :: Maybe Int,
                 altSpeedUp :: Maybe Int,
-                blockListEnabled :: Maybe Bool,
-                blockListSize :: Maybe Int,
-                blockListURL :: Maybe Text,
+                blocklistEnabled :: Maybe Bool,
+                blocklistSize :: Maybe Int,
+                blocklistURL :: Maybe Text,
                 cacheSizeMB :: Maybe Int,
                 configDir :: Maybe FilePath,
                 defaultTrackers :: Maybe Text,
@@ -168,9 +171,9 @@ instance ToJSON Session where
     ("alt-speed-time-enabled" .=) <$> altSpeedTimeEnabled s,
     ("alt-speed-time-end" .=) <$> altSpeedTimeEnd s,
     ("alt-speed-up" .=) <$> altSpeedUp s,
-    ("block-list-enabled" .=) <$> blockListEnabled s,
-    ("block-list-size" .=) <$> blockListSize s,
-    ("block-list-url" .=) <$> blockListURL s,
+    ("blocklist-enabled" .=) <$> blocklistEnabled s,
+    ("blocklist-size" .=) <$> blocklistSize s,
+    ("blocklist-url" .=) <$> blocklistURL s,
     ("cache-size-mb" .=) <$> cacheSizeMB s,
     ("config-dir" .=) <$> configDir s,
     ("default-trackers"  .=) <$> defaultTrackers s,
@@ -229,9 +232,9 @@ instance FromJSON Session where
     <*> v .:? "alt-speed-time-enabled"
     <*> v .:? "alt-speed-time-end"
     <*> v .:? "alt-speed-up"
-    <*> v .:? "block-list-enabled"
-    <*> v .:? "block-list-size"
-    <*> v .:? "block-list-url"
+    <*> v .:? "blocklist-enabled"
+    <*> v .:? "blocklist-size"
+    <*> v .:? "blocklist-url"
     <*> v .:? "cache-size-mb"
     <*> v .:? "config-dir"
     <*> v .:? "default-trackers"
@@ -240,7 +243,7 @@ instance FromJSON Session where
     <*> v .:? "download-queue-enabled"
     <*> v .:? "download-queue-size"
     <*> v .:? "encryption"
-    <*> v .:? "idle-seeeding-limit-enabled"
+    <*> v .:? "idle-seeding-limit-enabled"
     <*> v .:? "idle-seeding-limit"
     <*> v .:? "incomplete-dir-enabled"
     <*> v .:? "incomplete-dir"
@@ -255,7 +258,7 @@ instance FromJSON Session where
     <*> v .:? "queue-stalled-minutes"
     <*> v .:? "rename-partial-files"
     <*> v .:? "reqq"
-    <*> v .:? "rpc-version-minimun"
+    <*> v .:? "rpc-version-minimum"
     <*> v .:? "rpc-version-semver"
     <*> v .:? "rpc-version"
     <*> v .:? "script-torrent-added-enabled"
@@ -279,3 +282,67 @@ instance FromJSON Session where
     <*> v .:? "units"
     <*> v .:? "utp-enabled"
     <*> v .:? "version"
+
+emptySession :: Session
+emptySession = Session Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
+modifySession :: Session -> Session -> Session
+modifySession oldS newS = Session
+  (altSpeedDown newS <|> altSpeedDown oldS)
+  (altSpeedEnabled newS <|> altSpeedEnabled oldS)
+  (altSpeedTimeBegin newS <|> altSpeedTimeBegin oldS)
+  (altSpeedTimeDay newS <|> altSpeedTimeDay oldS)
+  (altSpeedTimeEnabled newS <|> altSpeedTimeEnabled oldS)
+  (altSpeedTimeEnd newS <|> altSpeedTimeEnd oldS)
+  (altSpeedUp newS <|> altSpeedUp oldS)
+  (blocklistEnabled newS <|> blocklistEnabled oldS)
+  (blocklistSize newS <|> blocklistSize oldS)
+  (blocklistURL newS <|> blocklistURL oldS)
+  (cacheSizeMB newS <|> cacheSizeMB oldS)
+  (configDir newS <|> configDir oldS)
+  (defaultTrackers newS <|> defaultTrackers oldS)
+  (dhtEnabled newS <|> dhtEnabled oldS)
+  (downloadDir newS <|> downloadDir oldS)
+  (downloadQueueEnabled newS <|> downloadQueueEnabled oldS)
+  (downloadQueueSize newS <|> downloadQueueSize oldS)
+  (encryption newS <|> encryption oldS)
+  (idleSeedingLimitEnabled newS <|> idleSeedingLimitEnabled oldS)
+  (idleSeedingLimit newS <|> idleSeedingLimit oldS)
+  (incompleteDirEnabled newS <|> incompleteDirEnabled oldS)
+  (incompleteDir newS <|> incompleteDir oldS)
+  (lpdEnabled newS <|> lpdEnabled oldS)
+  (peerLimitGlobal newS <|> peerLimitGlobal oldS)
+  (peerLimitPerTorrent newS <|> peerLimitPerTorrent oldS)
+  (peerPortRandomOnStart newS <|> peerPortRandomOnStart oldS)
+  (peerPort newS <|> peerPort oldS)
+  (pexEnabled newS <|> pexEnabled oldS)
+  (portForwardingEnabled newS <|> portForwardingEnabled oldS)
+  (queueStalledEnabled newS <|> queueStalledEnabled oldS)
+  (queueStalledMinutes newS <|> queueStalledMinutes oldS)
+  (renamePartialFiles newS <|> renamePartialFiles oldS)
+  (reqq newS <|> reqq oldS)
+  (rpcVersionMinimum newS <|> rpcVersionMinimum oldS)
+  (rpcVersionSemver newS <|> rpcVersionSemver oldS)
+  (rpcVersion newS <|> rpcVersion oldS)
+  (scriptTorrentAddedEnabled newS <|> scriptTorrentAddedEnabled oldS)
+  (scriptTorrentAddedFilename newS <|> scriptTorrentAddedFilename oldS)
+  (scriptTorrentDoneEnabled newS <|> scriptTorrentDoneEnabled oldS)
+  (scriptTorrentDoneFilename newS <|> scriptTorrentDoneFilename oldS)
+  (scriptTorrentDoneSeedingEnabled newS <|> scriptTorrentDoneSeedingEnabled oldS)
+  (scriptTorrentDoneSeedingFilename newS <|> scriptTorrentDoneSeedingFilename oldS)
+  (seedQueueEnabled newS <|> seedQueueEnabled oldS)
+  (seedQueueSize newS <|> seedQueueSize oldS)
+  (seedRatioLimit newS <|> seedRatioLimit oldS)
+  (seedRatioLimited newS <|> seedRatioLimited oldS)
+  (sequentialDownload newS <|> sequentialDownload oldS)
+  (sessionId newS <|> sessionId oldS)
+  (speedLimitDownEnabled newS <|> speedLimitDownEnabled oldS)
+  (speedLimitDown newS <|> speedLimitDown oldS)
+  (speedLimitUpEnabled newS <|> speedLimitUpEnabled oldS)
+  (speedLimitUp newS <|> speedLimitUp oldS)
+  (startAddedTorrents newS <|> startAddedTorrents oldS)
+  (trashOriginalTorrentFile newS <|> trashOriginalTorrentFile oldS)
+  (units newS <|> units oldS)
+  (utpEnabled newS <|> utpEnabled oldS)
+  (version newS <|> version oldS)
+
