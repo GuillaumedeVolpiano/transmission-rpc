@@ -26,6 +26,7 @@ module Transmission.RPC.Client (
   , queueDown
   , getSession
   , setSession
+  , blocklistUpdate
   )
 where
 import           Control.Applicative             ((<|>))
@@ -272,6 +273,13 @@ setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDa
                                                  , ("script-torrent-added-filename" .=) <$> scriptTorrentAddedFilename]
     if null args then error "No arguments to set"
                  else void $ request TorrentSet (Just . object $ args) Nothing False timeout
+
+blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
+blocklistUpdate timeout = do
+  result <- request BlocklistUpdate Nothing Nothing False timeout
+  case fromJSON result of
+    A.Error s -> error s
+    A.Success v -> pure v
 
 -- Utility functions
 
