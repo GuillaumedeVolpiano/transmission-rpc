@@ -1,5 +1,7 @@
 {-# LANGUAGE GADTs             #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
 module Transmission.RPC.Session
   (
   Session,
@@ -68,16 +70,31 @@ module Transmission.RPC.Session
   memoryUnits,
   memoryBytes,
   emptySession,
-  modifySession
+  modifySession,
+  SessionStats,
+  activeTorrentCount,
+  downloadSpeed,
+  pausedTorrentCount,
+  torrentCount,
+  uploadSpeed,
+  cumulativeStats,
+  currentStats,
+  Stats,
+  uploadedBytes,
+  downloadedBytes,
+  filesAdded,
+  sessionCount,
+  secondsActive
    )
 where
+import           Control.Applicative   ((<|>))
 import           Data.Aeson            (FromJSON, ToJSON, object, parseJSON,
                                         withObject, (.:), (.:?), (.=))
 import           Data.Aeson.Types      (toJSON)
 import           Data.Maybe            (catMaybes)
 import           Data.Text             (Text)
 import           Transmission.RPC.Enum (EncryptionMode)
-import Control.Applicative ((<|>))
+import GHC.Generics (Generic)
 
 data Session where
   Session :: {
@@ -150,6 +167,26 @@ data Units where
             memoryBytes :: Int
            } -> Units deriving Show
 
+data SessionStats where
+  SessionStats :: {
+                    activeTorrentCount :: Int,
+                    downloadSpeed :: Int,
+                    pausedTorrentCount :: Int,
+                    torrentCount :: Int,
+                    uploadSpeed :: Int,
+                    cumulativeStats :: Stats,
+                    currentStats :: Stats
+                   } -> SessionStats deriving Show
+
+data Stats where
+  Stats :: {
+            uploadedBytes :: Int,
+            downloadedBytes :: Int,
+            filesAdded :: Int,
+            sessionCount :: Int,
+            secondsActive :: Int
+            } -> Stats deriving (Generic, FromJSON, Show)
+
 instance ToJSON Units where
   toJSON (Units spu spb siu sib mu mb) = object ["speed-units" .= spu, "speed-bytes" .= spb, "size-units" .= siu, "size-bytes" .= sib, "memory-units" .= mu, "memory-bytes" .= mb]
 
@@ -161,6 +198,16 @@ instance FromJSON Units where
     <*> v .: "size-bytes"
     <*> v .: "memory-units"
     <*> v .: "memory-bytes"
+
+instance FromJSON SessionStats where
+  parseJSON = withObject "SessionStats" $ \v -> SessionStats
+    <$> v .: "activeTorrentCount"
+    <*> v .: "downloadSpeed"
+    <*> v .: "pausedTorrentCount"
+    <*> v .: "torrentCount"
+    <*> v .: "uploadSpeed"
+    <*> v .: "cumulative-stats"
+    <*> v .: "current-stats"
 
 instance ToJSON Session where
   toJSON s = object .catMaybes $ [

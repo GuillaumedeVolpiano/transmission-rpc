@@ -29,6 +29,7 @@ module Transmission.RPC.Client (
   , blocklistUpdate
   , portTest
   , freeSpace
+  , sessionStats
   )
 where
 import           Control.Applicative             ((<|>))
@@ -84,7 +85,7 @@ import           Transmission.RPC.Errors         (TransmissionContext (..),
                                                   TransmissionError (..))
 import qualified Transmission.RPC.Session        as TS (Session)
 import           Transmission.RPC.Session        (modifySession, rpcVersion,
-                                                  rpcVersionSemver, version)
+                                                  rpcVersionSemver, version, SessionStats)
 import           Transmission.RPC.Torrent        (Torrent, iD, mkTorrent)
 import qualified Transmission.RPC.Types          as TT (getSession)
 import           Transmission.RPC.Types          (Client, ID (..), IDs (..),
@@ -323,6 +324,15 @@ portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Not
 freeSpace :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
 freeSpace fp timeout = extractFieldFromValue "size-bytes" <$> request FreeSpace (Just . object $ [("path", toJSON fp)]) Nothing False timeout
 
+-- | Get Session statistics
+
+sessionStats :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es SessionStats
+sessionStats timeout = do
+  result <- request SessionStats Nothing Nothing False timeout
+  case fromJSON result of
+    A.Error s -> error s
+    A.Success s -> pure s
+  
 -- Utility functions
 
 buildArguments :: (Prim :> es, Reader Client :> es) => Maybe [Text] -> Eff es Value
@@ -377,7 +387,7 @@ examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.look
                       TorrentGet        -> pure value
                       TorrentAdd        -> added res
                       SessionGet        -> updateSession value >> pure value
-                      SessionStats      ->  undefined
+                      SessionStats      -> pure value
                       PortTest          -> pure value
                       BlocklistUpdate   -> pure value
                       FreeSpace         -> pure value
