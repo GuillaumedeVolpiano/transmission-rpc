@@ -25,6 +25,7 @@ module Transmission.RPC.Client (
   , queueUp
   , queueDown
   , getSession
+  , setSession
   )
 where
 import           Control.Applicative             ((<|>))
@@ -47,6 +48,7 @@ import qualified Data.ByteString.Lazy            as L (ByteString)
 import           Data.Fixed                      (E3, Fixed, showFixed)
 import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
+import           Data.List                       (intersperse)
 import           Data.Map                        (Map, (!))
 import           Data.Maybe                      (catMaybes, fromMaybe)
 import           Data.Text                       (Text)
@@ -73,7 +75,8 @@ import           Network.HTTP.Client             (HttpException (HttpExceptionRe
                                                   responseTimeoutMicro)
 import           Transmission.RPC.Constants      (Priority, defaultTimeout,
                                                   sessionIdHeaderName)
-import           Transmission.RPC.Enum           (IdleMode, RatioLimitMode)
+import           Transmission.RPC.Enum           (EncryptionMode, IdleMode,
+                                                  RatioLimitMode)
 import           Transmission.RPC.Errors         (TransmissionContext (..),
                                                   TransmissionError (..))
 import qualified Transmission.RPC.Session        as TS (Session)
@@ -244,6 +247,31 @@ getSession fields timeout = do
   case fromJSON response of
     A.Error s   -> error s
     A.Success s -> updateVersions >> pure s
+
+-- | Set Session parameters
+setSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
+setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDay altSpeedTimeEnabled altSpeedTimeEnd altSpeedUp blocklistEnabled blockListURL cacheSizeMB dhtEnabled defaultTrackers downloadDir downloadQueueEnabled downloadQueueSize encryption idleSeedingLimit idleSeedingLimitEnabled incompleteDir incompleteDirEnabled lpdEnabled peerLimitGlobal peerLimitPerTorrent peerPort peerPortRandomOnStart pexEnabled portForwardingEnabled queueStalledEnabled queueStalledMinutes renamePartialFiles scriptTorrentDoneEnabled scriptTorrentDoneFilename seedQueueEnabled seedQueueSize seedRatioLimit seedRatioLimited speedLimitDown speedLimitDownEnabled speedLimitUp speedLimitUpEnabled startAddedTorrents trashOriginalTorrentFile utpEnabled scriptTorrentDoneSeedingFilename scriptTorrentDoneSeedingEnabled scriptTorrentAddedEnabled scriptTorrentAddedFilename additionalArgs = do
+    let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown, ("alt-speed-enabled" .=) <$> altSpeedEnabled, ("alt-speed-time-begin" .=) <$> altSpeedTimeBegin
+                                                 , ("alt-speed-time-day" .=) <$> altSpeedTimeDay, ("alt-speed-time-enabled" .=) <$> altSpeedTimeEnabled, ("alt-speed-time-end" .=) <$> altSpeedTimeEnd
+                                                 , ("alt-speed-up" .=) <$> altSpeedUp, ("blocklist-enabled" .=) <$> blocklistEnabled, ("blocklist-url" .=) <$> blockListURL
+                                                 , ("cache-size-mb" .=) <$> cacheSizeMB, ("default-trackers" .=) . intersperse "\n" <$> defaultTrackers, ("dht-enabled" .=) <$> dhtEnabled
+                                                 , ("download-dir" .=) <$> downloadDir, ("download-queue-enabled" .=) <$> downloadQueueEnabled, ("download-queue-size" .=) <$> downloadQueueSize
+                                                 , ("encryption" .=) <$> encryption, ("idle-seeding-limit" .=) <$> idleSeedingLimit, ("idle-seeding-limit-enabled" .=) <$> idleSeedingLimitEnabled
+                                                 , ("incomplete-dir" .=) <$> incompleteDir, ("incomplete-dir-enabled" .=) <$> incompleteDirEnabled, ("lpd-enabled" .=) <$> lpdEnabled
+                                                 , ("peer-limit-global" .=) <$> peerLimitGlobal, ("peer-limit-per-torrent" .=) <$> peerLimitPerTorrent, ("peer-port" .=) <$> peerPort
+                                                 , ("peer-port-random-on-start" .=) <$> peerPortRandomOnStart, ("pex-enabled" .=) <$> pexEnabled, ("port-forwarding-enabled" .=) <$> portForwardingEnabled
+                                                 , ("queue-stalled-enabled" .=) <$> queueStalledEnabled, ("queue-stalled-minutes" .=) <$> queueStalledMinutes
+                                                 , ("rename-partial-files" .=) <$> renamePartialFiles, ("script-torrent-done-enabled" .=) <$> scriptTorrentDoneEnabled
+                                                 , ("script-torrent-done-filename" .=) <$> scriptTorrentDoneFilename, ("seed-queue-enabled" .=) <$> seedQueueEnabled
+                                                 , ("seed-queue-size" .=) <$> seedQueueSize, ("seedRatiorLimit" .=) <$> seedRatioLimit, ("seedRatioLimited" .=) <$> seedRatioLimited
+                                                 , ("speed-limit-down" .=) <$> speedLimitDown, ("speed-limit-down-enabled" .=) <$> speedLimitDownEnabled, ("speed-limit-up" .=) <$> speedLimitUp
+                                                 , ("speed-limit-up-enabled" .=) <$> speedLimitUpEnabled, ("start-added-torrents" .=) <$> startAddedTorrents
+                                                 , ("trash-original-torrent-file" .=) <$> trashOriginalTorrentFile, ("utp-enabled" .=) <$> utpEnabled
+                                                 , ("script-torrent-done-seeding-filename" .=) <$> scriptTorrentDoneSeedingFilename
+                                                 , ("script-torrent-done-seeding-enabled" .=) <$> scriptTorrentDoneSeedingEnabled, ("script-torrent-added-enabled" .=) <$> scriptTorrentAddedEnabled
+                                                 , ("script-torrent-added-filename" .=) <$> scriptTorrentAddedFilename]
+    if null args then error "No arguments to set"
+                 else void $ request TorrentSet (Just . object $ args) Nothing False timeout
 
 -- Utility functions
 
