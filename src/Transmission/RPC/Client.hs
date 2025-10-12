@@ -31,6 +31,8 @@ module Transmission.RPC.Client (
   , freeSpace
   , sessionStats
   , setGroup
+  , groupGet
+  , groupsGet
   )
 where
 import           Control.Applicative             ((<|>))
@@ -58,7 +60,7 @@ import           Data.Map                        (Map, (!))
 import           Data.Maybe                      (catMaybes, fromMaybe)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T (pack)
-import qualified Data.Vector                     as V (toList)
+import qualified Data.Vector                     as V (toList, head)
 import           Effectful                       (Eff, (:>))
 import           Effectful.Error.Static          (HasCallStack)
 import           Effectful.Exception             (throwIO, try)
@@ -347,6 +349,14 @@ setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown s
                                     , ("speedLimitUp" .=) <$> speedLimitUp]
     void $ request GroupSet (Just args) Nothing False timeout
 
+-- | Access Infos about a Bandwidth Group
+
+groupGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value 
+groupGet name timeout = V.head . extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ name) Nothing False timeout
+
+-- | Access infos about a list of Bandwidth groups or all of them (if the list is empty)
+groupsGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
+groupsGet names timeout = extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ names) Nothing False timeout
 
 -- Utility functions
 
