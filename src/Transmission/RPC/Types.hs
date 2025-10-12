@@ -1,8 +1,8 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE GADTs         #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE GADTs             #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeOperators     #-}
 module Transmission.RPC.Types
   (
   -- * Client
@@ -45,15 +45,15 @@ where
 import           Data.Aeson               (FromJSON, ToJSON, toJSON)
 import           Data.ByteString          (ByteString)
 import           Data.Text                (Text)
+import           Effectful                (Eff, (:>))
 import           Effectful.FileSystem.IO  (Handle)
+import           Effectful.Internal.Monad (Prim)
 import           Effectful.Prim.IORef     (IORef, newIORef)
 import           Effectful.Wreq           (Options)
 import           Effectful.Wreq.Session   (Session)
 import           GHC.Generics             (Generic)
-import Transmission.RPC.Session (emptySession)
 import qualified Transmission.RPC.Session as TS (Session)
-import Effectful (Eff, (:>))
-import Effectful.Internal.Monad (Prim)
+import           Transmission.RPC.Session (emptySession)
 
 data Client where
   Client :: {getURI :: URI,
@@ -83,13 +83,15 @@ type Path = String
 type Timeout = Maybe Int
 type Label = String
 
-data RPCMethod = QueueMoveBottom | QueueMoveDown | QueueMoveTop | QueueMoveUp | TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
+data RPCMethod = GroupSet | GroupGet | QueueMoveBottom | QueueMoveDown | QueueMoveTop | QueueMoveUp | TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
 
 instance ToJSON RPCMethod where
+  toJSON GroupSet           = "group-set"
+  toJSON GroupGet           = "group-get"
   toJSON QueueMoveBottom    = "queue-move-bottom"
   toJSON QueueMoveDown      = "queue-move-down"
   toJSON QueueMoveTop       = "queue-move-top"

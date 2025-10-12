@@ -30,16 +30,17 @@ module Transmission.RPC.Client (
   , portTest
   , freeSpace
   , sessionStats
+  , setGroup
   )
 where
 import           Control.Applicative             ((<|>))
 import           Control.Lens                    ((.~))
 import           Control.Lens.Operators          ((&), (^.))
 import           Control.Monad                   ((>=>))
-import           Data.Aeson                      (Key, ToJSON,
+import           Data.Aeson                      (FromJSON, Key, ToJSON,
                                                   Value (Array, Null, Object),
                                                   fromJSON, object, toJSON,
-                                                  (.=), FromJSON)
+                                                  (.=))
 import qualified Data.Aeson                      as A (Result (..))
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
@@ -84,8 +85,9 @@ import           Transmission.RPC.Enum           (EncryptionMode, IdleMode,
 import           Transmission.RPC.Errors         (TransmissionContext (..),
                                                   TransmissionError (..))
 import qualified Transmission.RPC.Session        as TS (Session)
-import           Transmission.RPC.Session        (modifySession, rpcVersion,
-                                                  rpcVersionSemver, version, SessionStats)
+import           Transmission.RPC.Session        (SessionStats, modifySession,
+                                                  rpcVersion, rpcVersionSemver,
+                                                  version)
 import           Transmission.RPC.Torrent        (Torrent, iD, mkTorrent)
 import qualified Transmission.RPC.Types          as TT (getSession)
 import           Transmission.RPC.Types          (Client, ID (..), IDs (..),
@@ -311,13 +313,13 @@ blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Tim
 blocklistUpdate timeout = do
   result <- request BlocklistUpdate Nothing Nothing False timeout
   case fromJSON result of
-    A.Error s -> error s
+    A.Error s   -> error s
     A.Success v -> pure v
 
 -- | Tests to see if the incoming peer port is accessible from the outside world.
 
 portTest :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
-portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout 
+portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout
 
 -- | Get the amount of free space (in bytes) at the provided location.
 
@@ -330,9 +332,22 @@ sessionStats :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :>
 sessionStats timeout = do
   result <- request SessionStats Nothing Nothing False timeout
   case fromJSON result of
-    A.Error s -> error s
+    A.Error s   -> error s
     A.Success s -> pure s
-  
+
+-- | create or update a Bandwidth group
+
+setGroup :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
+setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown speedLimitUpEnabled speedLimitUp =
+  do
+    let args = object . catMaybes $ [Just ("name" .= name), ("honorsSessionLimits" .= ) <$> honorsSessionLimits
+                                    , ("speed-limit-down-enabled" .=) <$> speedLimitDownEnabled
+                                    , ("speed-limit-down" .=) <$> speedLimitDown
+                                    , ("speed-limitUpEnabled" .=) <$> speedLimitUpEnabled
+                                    , ("speedLimitUp" .=) <$> speedLimitUp]
+    void $ request GroupSet (Just args) Nothing False timeout
+
+
 -- Utility functions
 
 buildArguments :: (Prim :> es, Reader Client :> es) => Maybe [Text] -> Eff es Value
@@ -439,5 +454,5 @@ extractFieldFromValue field result = extract
     extract = case K.lookup field res of
                 Nothing -> error (show result ++ " has no field called " ++ show field)
                 Just val -> case fromJSON val of
-                              A.Error s -> error s
+                              A.Error s   -> error s
                               A.Success b -> b
