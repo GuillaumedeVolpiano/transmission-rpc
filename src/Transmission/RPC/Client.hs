@@ -94,14 +94,16 @@ import           Transmission.RPC.Torrent        (Torrent, iD, mkTorrent)
 import qualified Transmission.RPC.Types          as TT (getSession)
 import           Transmission.RPC.Types          (Client, ID (..), IDs (..),
                                                   Label, RPCMethod (..),
-                                                  Timeout, TorrentRef,
+                                                  Timeout, TorrentRef (..),
                                                   getHttpSession, getOpts,
                                                   getProtocolVersion,
                                                   getSemVerVersion,
                                                   getServerVersion, getURI,
                                                   newClient)
-import           Transmission.RPC.Utils          (getTorrentArguments,
-                                                  maybeJSON, readTorrent)
+import           Transmission.RPC.Utils          (getTorrentArguments)
+import Data.Text.Encoding (decodeUtf8)
+import qualified Effectful.FileSystem.IO.ByteString as FS
+import Effectful.FileSystem.IO.ByteString (hGetContents)
 
 -- constants
 currentProtocolVersion :: Int
@@ -119,9 +121,26 @@ fromUrl url opts timeout =  do
 
 -- | Add a torrent to the transfer list
 addTorrent :: (FileSystem :> es, Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
-addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority= do
-                                     torrentData <- readTorrent tref
-                                     let args = Just . object . (torrentData :) . catMaybes $ [maybeJSON ("download-dir", downloadDir), maybeJSON ("files-unwanted", filesUnwanted), maybeJSON ("files-wanted", filesWanted), maybeJSON ("paused", paused), maybeJSON ("peerLimit", peerLimit), maybeJSON ("priority-high", priorityHigh), maybeJSON ("priority-low", priorityLow), maybeJSON ("priority-normal", priorityNormal), maybeJSON ("cookies", cookies), maybeJSON ("labels", labels), maybeJSON ("bandwidthPriority", bandwidthPriority)]
+addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority =
+  do
+                                     torrentData <- (
+                                                     case tref of
+                                                         TorrentURI u -> pure $ "filename" .= u
+                                                         Binary b -> ("metainfo" .=) . decodeUtf8 <$> hGetContents b
+                                                         TorrentContent c -> pure $ "metainfo" .= decodeUtf8 c
+                                                         Path p -> ("metainfo" .=) . decodeUtf8 <$> FS.readFile p
+                                                    ) :: (FileSystem :> es0) => Eff es0 (Key, Value)
+                                     let args = Just . object . (torrentData :) . catMaybes $ [("download-dir" .=) <$> downloadDir
+                                                                                              , ("files-unwanted" .=) <$> filesUnwanted
+                                                                                              , ("files-wanted" .=) <$> filesWanted
+                                                                                              , ("paused" .=) <$> paused
+                                                                                              , ("peerLimit" .=) <$> peerLimit
+                                                                                              , ("priority-high" .=) <$> priorityHigh
+                                                                                              , ("priority-low" .=) <$> priorityLow
+                                                                                              , ("priority-normal" .=) <$> priorityNormal
+                                                                                              , ("cookies" .=) <$> cookies
+                                                                                              , ("labels" .=) <$> labels
+                                                                                              , ("bandwidthPriority" .=) <$> bandwidthPriority]
                                      mkTorrent <$> request TorrentAdd args Nothing False timeout
 
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
@@ -257,7 +276,7 @@ getSession fields timeout = do
     A.Success s -> updateVersions >> pure s
 
 -- | Set Session parameters
-setSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
+setSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
 setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDay altSpeedTimeEnabled altSpeedTimeEnd altSpeedUp blocklistEnabled blockListURL cacheSizeMB dhtEnabled defaultTrackers downloadDir downloadQueueEnabled downloadQueueSize encryption idleSeedingLimit idleSeedingLimitEnabled incompleteDir incompleteDirEnabled lpdEnabled peerLimitGlobal peerLimitPerTorrent peerPort peerPortRandomOnStart pexEnabled portForwardingEnabled queueStalledEnabled queueStalledMinutes renamePartialFiles scriptTorrentDoneEnabled scriptTorrentDoneFilename seedQueueEnabled seedQueueSize seedRatioLimit seedRatioLimited speedLimitDown speedLimitDownEnabled speedLimitUp speedLimitUpEnabled startAddedTorrents trashOriginalTorrentFile utpEnabled scriptTorrentDoneSeedingFilename scriptTorrentDoneSeedingEnabled scriptTorrentAddedEnabled scriptTorrentAddedFilename additionalArgs = do
     let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown
                                                  , ("alt-speed-enabled" .=) <$> altSpeedEnabled
@@ -311,7 +330,7 @@ setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDa
 
 -- | Update blocklist. Returns the size of the blocklist
 
-blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
+blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
 blocklistUpdate timeout = do
   result <- request BlocklistUpdate Nothing Nothing False timeout
   case fromJSON result of
@@ -320,12 +339,12 @@ blocklistUpdate timeout = do
 
 -- | Tests to see if the incoming peer port is accessible from the outside world.
 
-portTest :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
+portTest :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
 portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout
 
 -- | Get the amount of free space (in bytes) at the provided location.
 
-freeSpace :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
+freeSpace :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
 freeSpace fp timeout = extractFieldFromValue "size-bytes" <$> request FreeSpace (Just . object $ [("path", toJSON fp)]) Nothing False timeout
 
 -- | Get Session statistics
@@ -339,7 +358,7 @@ sessionStats timeout = do
 
 -- | create or update a Bandwidth group
 
-setGroup :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
+setGroup :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
 setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown speedLimitUpEnabled speedLimitUp =
   do
     let args = object . catMaybes $ [Just ("name" .= name), ("honorsSessionLimits" .= ) <$> honorsSessionLimits
@@ -347,15 +366,15 @@ setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown s
                                     , ("speed-limit-down" .=) <$> speedLimitDown
                                     , ("speed-limitUpEnabled" .=) <$> speedLimitUpEnabled
                                     , ("speedLimitUp" .=) <$> speedLimitUp]
-    void $ request GroupSet (Just args) Nothing False timeout
+    void $ request GroupSet (Just args) Nothing False timeout
 
 -- | Access Infos about a Bandwidth Group
 
-groupGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value 
+groupGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value
 groupGet name timeout = V.head . extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ name) Nothing False timeout
 
 -- | Access infos about a list of Bandwidth groups or all of them (if the list is empty)
-groupsGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
+groupsGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
 groupsGet names timeout = extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ names) Nothing False timeout
 
 -- Utility functions
