@@ -27,6 +27,8 @@ module Transmission.RPC.Client (
   , getSession
   , setSession
   , blocklistUpdate
+  , portTest
+  , freeSpace
   )
 where
 import           Control.Applicative             ((<|>))
@@ -36,7 +38,7 @@ import           Control.Monad                   ((>=>))
 import           Data.Aeson                      (Key, ToJSON,
                                                   Value (Array, Null, Object),
                                                   fromJSON, object, toJSON,
-                                                  (.=))
+                                                  (.=), FromJSON)
 import qualified Data.Aeson                      as A (Result (..))
 import           Data.Aeson.Key                  (fromString)
 import           Data.Aeson.KeyMap               (KeyMap)
@@ -252,27 +254,57 @@ getSession fields timeout = do
 -- | Set Session parameters
 setSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
 setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDay altSpeedTimeEnabled altSpeedTimeEnd altSpeedUp blocklistEnabled blockListURL cacheSizeMB dhtEnabled defaultTrackers downloadDir downloadQueueEnabled downloadQueueSize encryption idleSeedingLimit idleSeedingLimitEnabled incompleteDir incompleteDirEnabled lpdEnabled peerLimitGlobal peerLimitPerTorrent peerPort peerPortRandomOnStart pexEnabled portForwardingEnabled queueStalledEnabled queueStalledMinutes renamePartialFiles scriptTorrentDoneEnabled scriptTorrentDoneFilename seedQueueEnabled seedQueueSize seedRatioLimit seedRatioLimited speedLimitDown speedLimitDownEnabled speedLimitUp speedLimitUpEnabled startAddedTorrents trashOriginalTorrentFile utpEnabled scriptTorrentDoneSeedingFilename scriptTorrentDoneSeedingEnabled scriptTorrentAddedEnabled scriptTorrentAddedFilename additionalArgs = do
-    let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown, ("alt-speed-enabled" .=) <$> altSpeedEnabled, ("alt-speed-time-begin" .=) <$> altSpeedTimeBegin
-                                                 , ("alt-speed-time-day" .=) <$> altSpeedTimeDay, ("alt-speed-time-enabled" .=) <$> altSpeedTimeEnabled, ("alt-speed-time-end" .=) <$> altSpeedTimeEnd
-                                                 , ("alt-speed-up" .=) <$> altSpeedUp, ("blocklist-enabled" .=) <$> blocklistEnabled, ("blocklist-url" .=) <$> blockListURL
-                                                 , ("cache-size-mb" .=) <$> cacheSizeMB, ("default-trackers" .=) . intersperse "\n" <$> defaultTrackers, ("dht-enabled" .=) <$> dhtEnabled
-                                                 , ("download-dir" .=) <$> downloadDir, ("download-queue-enabled" .=) <$> downloadQueueEnabled, ("download-queue-size" .=) <$> downloadQueueSize
-                                                 , ("encryption" .=) <$> encryption, ("idle-seeding-limit" .=) <$> idleSeedingLimit, ("idle-seeding-limit-enabled" .=) <$> idleSeedingLimitEnabled
-                                                 , ("incomplete-dir" .=) <$> incompleteDir, ("incomplete-dir-enabled" .=) <$> incompleteDirEnabled, ("lpd-enabled" .=) <$> lpdEnabled
-                                                 , ("peer-limit-global" .=) <$> peerLimitGlobal, ("peer-limit-per-torrent" .=) <$> peerLimitPerTorrent, ("peer-port" .=) <$> peerPort
-                                                 , ("peer-port-random-on-start" .=) <$> peerPortRandomOnStart, ("pex-enabled" .=) <$> pexEnabled, ("port-forwarding-enabled" .=) <$> portForwardingEnabled
-                                                 , ("queue-stalled-enabled" .=) <$> queueStalledEnabled, ("queue-stalled-minutes" .=) <$> queueStalledMinutes
-                                                 , ("rename-partial-files" .=) <$> renamePartialFiles, ("script-torrent-done-enabled" .=) <$> scriptTorrentDoneEnabled
-                                                 , ("script-torrent-done-filename" .=) <$> scriptTorrentDoneFilename, ("seed-queue-enabled" .=) <$> seedQueueEnabled
-                                                 , ("seed-queue-size" .=) <$> seedQueueSize, ("seedRatiorLimit" .=) <$> seedRatioLimit, ("seedRatioLimited" .=) <$> seedRatioLimited
-                                                 , ("speed-limit-down" .=) <$> speedLimitDown, ("speed-limit-down-enabled" .=) <$> speedLimitDownEnabled, ("speed-limit-up" .=) <$> speedLimitUp
-                                                 , ("speed-limit-up-enabled" .=) <$> speedLimitUpEnabled, ("start-added-torrents" .=) <$> startAddedTorrents
-                                                 , ("trash-original-torrent-file" .=) <$> trashOriginalTorrentFile, ("utp-enabled" .=) <$> utpEnabled
+    let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown
+                                                 , ("alt-speed-enabled" .=) <$> altSpeedEnabled
+                                                 , ("alt-speed-time-begin" .=) <$> altSpeedTimeBegin
+                                                 , ("alt-speed-time-day" .=) <$> altSpeedTimeDay
+                                                 , ("alt-speed-time-enabled" .=) <$> altSpeedTimeEnabled
+                                                 , ("alt-speed-time-end" .=) <$> altSpeedTimeEnd
+                                                 , ("alt-speed-up" .=) <$> altSpeedUp
+                                                 , ("blocklist-enabled" .=) <$> blocklistEnabled
+                                                 , ("blocklist-url" .=) <$> blockListURL
+                                                 , ("cache-size-mb" .=) <$> cacheSizeMB
+                                                 , ("default-trackers" .=) . intersperse "\n" <$> defaultTrackers
+                                                 , ("dht-enabled" .=) <$> dhtEnabled
+                                                 , ("download-dir" .=) <$> downloadDir
+                                                 , ("download-queue-enabled" .=) <$> downloadQueueEnabled
+                                                 , ("download-queue-size" .=) <$> downloadQueueSize
+                                                 , ("encryption" .=) <$> encryption
+                                                 , ("idle-seeding-limit" .=) <$> idleSeedingLimit
+                                                 , ("idle-seeding-limit-enabled" .=) <$> idleSeedingLimitEnabled
+                                                 , ("incomplete-dir" .=) <$> incompleteDir
+                                                 , ("incomplete-dir-enabled" .=) <$> incompleteDirEnabled
+                                                 , ("lpd-enabled" .=) <$> lpdEnabled
+                                                 , ("peer-limit-global" .=) <$> peerLimitGlobal
+                                                 , ("peer-limit-per-torrent" .=) <$> peerLimitPerTorrent
+                                                 , ("peer-port" .=) <$> peerPort
+                                                 , ("peer-port-random-on-start" .=) <$> peerPortRandomOnStart
+                                                 , ("pex-enabled" .=) <$> pexEnabled
+                                                 , ("port-forwarding-enabled" .=) <$> portForwardingEnabled
+                                                 , ("queue-stalled-enabled" .=) <$> queueStalledEnabled
+                                                 , ("queue-stalled-minutes" .=) <$> queueStalledMinutes
+                                                 , ("rename-partial-files" .=) <$> renamePartialFiles
+                                                 , ("script-torrent-done-enabled" .=) <$> scriptTorrentDoneEnabled
+                                                 , ("script-torrent-done-filename" .=) <$> scriptTorrentDoneFilename
+                                                 , ("seed-queue-enabled" .=) <$> seedQueueEnabled
+                                                 , ("seed-queue-size" .=) <$> seedQueueSize
+                                                 , ("seedRatiorLimit" .=) <$> seedRatioLimit
+                                                 , ("seedRatioLimited" .=) <$> seedRatioLimited
+                                                 , ("speed-limit-down" .=) <$> speedLimitDown
+                                                 , ("speed-limit-down-enabled" .=) <$> speedLimitDownEnabled
+                                                 , ("speed-limit-up" .=) <$> speedLimitUp
+                                                 , ("speed-limit-up-enabled" .=) <$> speedLimitUpEnabled
+                                                 , ("start-added-torrents" .=) <$> startAddedTorrents
+                                                 , ("trash-original-torrent-file" .=) <$> trashOriginalTorrentFile
+                                                 , ("utp-enabled" .=) <$> utpEnabled
                                                  , ("script-torrent-done-seeding-filename" .=) <$> scriptTorrentDoneSeedingFilename
-                                                 , ("script-torrent-done-seeding-enabled" .=) <$> scriptTorrentDoneSeedingEnabled, ("script-torrent-added-enabled" .=) <$> scriptTorrentAddedEnabled
+                                                 , ("script-torrent-done-seeding-enabled" .=) <$> scriptTorrentDoneSeedingEnabled
+                                                 , ("script-torrent-added-enabled" .=) <$> scriptTorrentAddedEnabled
                                                  , ("script-torrent-added-filename" .=) <$> scriptTorrentAddedFilename]
     if null args then error "No arguments to set"
                  else void $ request TorrentSet (Just . object $ args) Nothing False timeout
+
+-- | Update blocklist. Returns the size of the blocklist
 
 blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
 blocklistUpdate timeout = do
@@ -280,6 +312,16 @@ blocklistUpdate timeout = do
   case fromJSON result of
     A.Error s -> error s
     A.Success v -> pure v
+
+-- | Tests to see if the incoming peer port is accessible from the outside world.
+
+portTest :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
+portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout 
+
+-- | Get the amount of free space (in bytes) at the provided location.
+
+freeSpace :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
+freeSpace fp timeout = extractFieldFromValue "size-bytes" <$> request FreeSpace (Just . object $ [("path", toJSON fp)]) Nothing False timeout
 
 -- Utility functions
 
@@ -378,3 +420,14 @@ updateVersions = do
   modifyIORef srv (version sesh <|>)
   modifyIORef smv (rpcVersionSemver sesh <|>)
 
+extractFieldFromValue :: FromJSON a => Key -> Value -> a
+extractFieldFromValue field result = extract
+  where
+    res = case result of
+            Object r -> r
+            _        -> error (show result ++ " is not an object")
+    extract = case K.lookup field res of
+                Nothing -> error (show result ++ " has no field called " ++ show field)
+                Just val -> case fromJSON val of
+                              A.Error s -> error s
+                              A.Success b -> b
