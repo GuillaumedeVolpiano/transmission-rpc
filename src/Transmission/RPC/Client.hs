@@ -75,6 +75,7 @@ import           Effectful.Wreq                  (Options, Response, Wreq,
                                                   responseStatus, statusCode)
 import           Effectful.Wreq.Session          (Session, get, newSession,
                                                   postWith)
+import Network.Wreq.Types (Postable)
 import           Network.HTTP.Client             (HttpException (HttpExceptionRequest),
                                                   HttpExceptionContent (StatusCodeException),
                                                   defaultManagerSettings,
@@ -399,6 +400,22 @@ getSessionId url sesh = do
                     sessionId (Left e) = throwIO e
                 sessionId failGet
 
+safeRequest :: (Prim :> es, Wreq :> es, Reader Client :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
+safeRequest query timeout = do
+  optsRef <- asks getOpts
+  opts <- readIORef optsRef
+  sesh <- asks getHttpSession
+  uri <- asks getURI
+  let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
+  unsafePost <- try (postWith opts' sesh uri query)
+  case unsafePost of
+    Right r -> pure r
+    Left e@(HttpExceptionRequest _ (StatusCodeException s _)) -> if s ^. (responseStatus . statusCode) == 409 then do
+          let sessionId = s ^. responseHeader sessionIdHeaderName
+          modifyIORef optsRef (\o -> o & header sessionIdHeaderName .~ [sessionId])
+          safeRequest query timeout
+      else throwIO e
+    Left e -> throwIO e
 
 request :: (HasCallStack, Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
 request _ _ Nothing True _ = error "request requires ids"
@@ -406,12 +423,8 @@ request _ _ (Just (IDs [])) True _ = error "request requires ids"
 request rpcm args ids _ timeout = do
   let args' = maybe id (valueInsert "ids") ids . fromMaybe Null $ args
       query = object [("method", toJSON rpcm), ("arguments", args')]
-  sesh <- asks getHttpSession
-  opts <- asks getOpts
-  let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
-  uri <- asks getURI
   start <- monotonicTime
-  response <- postWith opts' sesh uri query
+  response <- safeRequest query timeout
   elapsed <- (+ negate start) <$> monotonicTime
   logAttention_ (T.pack $ "http request took " ++ showFixed True (fromRational . toRational $ elapsed :: Fixed E3) ++ " s")
   let body = parse json $ response ^. responseBody

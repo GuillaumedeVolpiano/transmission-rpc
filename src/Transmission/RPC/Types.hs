@@ -59,7 +59,7 @@ data Client where
   Client :: {getURI :: URI,
                getSession :: IORef TS.Session,
                getHttpSession :: Session,
-               getOpts :: Options,
+               getOpts :: IORef Options,
                getProtocolVersion :: IORef Int,
                getServerVersion :: IORef (Maybe Text),
                getSemVerVersion :: IORef (Maybe Text)} ->
@@ -128,7 +128,8 @@ instance FromJSON IDs
 newClient :: (Prim :> es) => URI -> Session -> Options -> Int -> Eff es Client
 newClient uri session opts pv = do
   sesh <- newIORef emptySession
+  opts' <- newIORef opts
   pv' <- newIORef pv
   srv <- newIORef Nothing
   smv <- newIORef Nothing
-  pure $ Client uri sesh session opts pv' srv smv
+  pure $ Client uri sesh session opts' pv' srv smv
