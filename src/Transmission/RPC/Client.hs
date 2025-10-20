@@ -57,7 +57,7 @@ import           Data.Functor                    (void)
 import qualified Data.HashSet                    as S (fromList)
 import           Data.List                       (intersperse)
 import           Data.Map                        (Map, (!))
-import           Data.Maybe                      (catMaybes, fromMaybe)
+import           Data.Maybe                      (catMaybes, fromMaybe, fromJust)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T (pack)
 import qualified Data.Vector                     as V (toList, head)
@@ -91,7 +91,7 @@ import qualified Transmission.RPC.Session        as TS (Session)
 import           Transmission.RPC.Session        (SessionStats, modifySession,
                                                   rpcVersion, rpcVersionSemver,
                                                   version)
-import           Transmission.RPC.Torrent        (Torrent, iD, mkTorrent)
+import           Transmission.RPC.Torrent        (Torrent, toId, mkTorrent)
 import qualified Transmission.RPC.Types          as TT (getSession)
 import           Transmission.RPC.Types          (Client, ID (..), IDs (..),
                                                   Label, RPCMethod (..),
@@ -157,7 +157,7 @@ startTorrent ids bypassQueue = void . request (if bypassQueue then TorrentStartN
 startAll :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
 startAll bypassQueue timeout = do
   let method = if bypassQueue then TorrentStartNow else TorrentStart
-  ids <- IDs . map (ID . iD) <$> getTorrents Nothing (Just []) Nothing
+  ids <- IDs . map (ID . fromJust . toId) <$> getTorrents Nothing (Just []) Nothing
   void . request method Nothing (Just ids) True $ timeout
 
 -- | Stop torrent(s) with provided id(s)

@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE GADTs             #-}
-{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveAnyClass #-}
 module Transmission.RPC.Torrent
@@ -42,6 +41,7 @@ module Transmission.RPC.Torrent
   , trackers
   , trackerList
   , trackerStats
+  , toId
   , torrentFile
   , totalSize
   , webseedsSendingToUs
@@ -97,45 +97,24 @@ module Transmission.RPC.Torrent
   , siteName
   -- * shared functions
   , priority
-  , wanted
-  , announce
-  , scrape
-  , tier
-  , iD
   , mkTorrent
   )
 
 where
 
 import           Data.Aeson                 (FromJSON, ToJSON (toJSON),
-                                             Value (Number), object, withObject,
-                                             withScientific, (.:), (.=), (.:?), Result (..), fromJSON)
-import           Data.Aeson.Types           (FromJSON (parseJSON), prependFailure)
-import           Data.Maybe                 (fromJust, catMaybes)
-import           Data.Time                  (NominalDiffTime, UTCTime)
+                                             object, withObject, (.:), (.=), (.:?), Result (..), fromJSON, Value)
+import           Data.Aeson.Types           (FromJSON (parseJSON))
+import           Data.Maybe                 (catMaybes)
+import           Data.Time                  (UTCTime)
 import           GHC.Generics               (Generic)
 import           Transmission.RPC.Constants (Priority)
 import           Transmission.RPC.Enum      (IdleMode, RatioLimitMode)
 import Data.Text (Text)
 import Data.Ratio ((%))
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
-
-class HasWanted a where
-  wanted :: a -> [Int]
-
-class IsTracker a where
-  announce :: a -> Text
-  scrape :: a -> Text
-  tier :: a -> Int
-
-class HasID a where
-  iD :: a -> Int
-
-data ETA where
-  ETA :: NominalDiffTime -> ETA
-  NA :: ETA
-  Unknown :: ETA
-  deriving Show
+import qualified Transmission.RPC.Types as T (Error(..))
+import Transmission.RPC.Types (ETA(..), Status(..))
 
 data File where
   File :: {fBytesCompleted :: Int,
@@ -185,8 +164,6 @@ data Tracker where
                 tTier :: Int} ->
                Tracker deriving Show
 
-data Status = Stopped | CheckPending | Checking | DownloadPending | Downloading | SeedPending | Seeding deriving Show
-
 data TrackerStats where
   TrackerStats :: {tsid :: Int,
                      announceState :: Int,
@@ -234,7 +211,7 @@ data Torrent where
                 downloadLimit :: Maybe Int,
                 downloadLimited :: Maybe Bool,
                 editDate :: Maybe UTCTime,
-                errorCode :: Maybe Int,
+                errorCode :: Maybe T.Error,
                 errorString :: Maybe Text,
                 eta :: Maybe ETA,
                 etaIdle :: Maybe Int,
@@ -297,17 +274,6 @@ data Torrent where
                 webseeds :: Maybe [Text],
                 webseedsSendingToUs :: Maybe Int} ->
                Torrent deriving (Show, Generic)
-
-instance ToJSON ETA where
-  toJSON (ETA v) = toJSON v
-  toJSON NA      = Number (-1)
-  toJSON Unknown = Number (-2)
-
-instance FromJSON ETA where
-  parseJSON = withScientific "ETA" $ \case
-                                          (-1) -> pure NA
-                                          (-2) -> pure Unknown
-                                          v -> if v >= 0 then pure (ETA . fromRational . toRational $ v) else prependFailure "Parsing ETA failed: " (fail ("Not an ETA " ++ show v))
 
 instance ToJSON File where
   toJSON (File b l n bp ep) = object . catMaybes $ [Just ("bytesCompleted" .= b), Just ("length" .= l), Just ("name" .= n), 
@@ -439,26 +405,6 @@ instance FromJSON TrackerStats where
     <*> v .: "seederCount"
     <*> v .: "sitename"
     <*> v .: "tier"
-
-instance ToJSON Status where
-  toJSON Stopped         = Number 0
-  toJSON CheckPending    = Number 1
-  toJSON Checking        = Number 2
-  toJSON DownloadPending = Number 3
-  toJSON Downloading     = Number 4
-  toJSON SeedPending     = Number 5
-  toJSON Seeding         = Number 6
-
-instance FromJSON Status where
-  parseJSON = withScientific "Status" $ \case
-                                              0 -> pure Stopped
-                                              1 -> pure CheckPending
-                                              2 -> pure Checking
-                                              3 -> pure DownloadPending
-                                              4 -> pure Downloading
-                                              5 -> pure SeedPending
-                                              6 -> pure Seeding
-                                              v -> prependFailure "Parsing Status failed: " (fail ("not a Status value " ++ show v)) 
 
 instance ToJSON Torrent where
   toJSON t = object . catMaybes $ [
@@ -620,28 +566,6 @@ instance FromJSON Torrent where
     <*> v .:? "wanted"
     <*> v .:? "webseeds"
     <*> v .:? "webseedsSendingToUs"
-
-instance HasWanted Torrent where
-  wanted = fromJust . toWanted
-
-instance IsTracker Tracker where
-  announce = tAnnounce
-  scrape = tScrape
-  tier = tTier
-
-instance IsTracker TrackerStats where
-  announce = tsAnnounce
-  scrape = tsScrape
-  tier = tsTier
-
-instance HasID Tracker where
-  iD = tid
-
-instance HasID TrackerStats where
-  iD = tsid
-
-instance HasID Torrent where
-  iD = fromJust . toId
 
 mkTorrent :: Value -> Torrent
 mkTorrent v = case fromJSON v of

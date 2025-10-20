@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE GADTs             #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators     #-}
 module Transmission.RPC.Types
@@ -39,10 +40,17 @@ module Transmission.RPC.Types
   , ID(..)
   , IDs(..)
 
+  , Error(..)
+
+  , ETA(..)
+
+  , Status(..)
  )
 where
 
-import           Data.Aeson               (FromJSON, ToJSON, toJSON)
+import           Data.Aeson               (FromJSON, ToJSON, Value (Number),
+                                           toJSON, withScientific)
+import           Data.Aeson.Types         (FromJSON (parseJSON), prependFailure)
 import           Data.ByteString          (ByteString)
 import           Data.Text                (Text)
 import           Effectful                (Eff, (:>))
@@ -54,6 +62,7 @@ import           Effectful.Wreq.Session   (Session)
 import           GHC.Generics             (Generic)
 import qualified Transmission.RPC.Session as TS (Session)
 import           Transmission.RPC.Session (emptySession)
+import Data.Time (NominalDiffTime)
 
 data Client where
   Client :: {getURI :: URI,
@@ -88,6 +97,16 @@ data RPCMethod = GroupSet | GroupGet | QueueMoveBottom | QueueMoveDown | QueueMo
 data JSONTypes = JSONNumber | JSONDouble | JSONObject | JSONString | JSONArray | JSONBool deriving Show
 
 data Args = Args JSONTypes Int (Maybe Int) (Maybe String) (Maybe String) String deriving Show
+
+data Error = OK | Warning | Tracker | Local deriving (Show, Eq)
+
+data ETA where
+  ETA :: NominalDiffTime -> ETA
+  NA :: ETA
+  Unknown :: ETA
+  deriving Show
+
+data Status = Stopped | CheckPending | Checking | DownloadPending | Downloading | SeedPending | Seeding deriving (Show, Eq)
 
 instance ToJSON RPCMethod where
   toJSON GroupSet           = "group-set"
@@ -124,6 +143,51 @@ instance ToJSON IDs where
   toJSON RecentlyActive = "recently-active"
 
 instance FromJSON IDs
+
+instance ToJSON Error where
+  toJSON OK      = Number 0
+  toJSON Warning = Number 1
+  toJSON Tracker = Number 2
+  toJSON Local   = Number 3
+
+instance FromJSON Error where
+  parseJSON = withScientific "Error" $ \case
+    0 -> pure OK
+    1 -> pure Warning
+    2 -> pure Tracker
+    3 -> pure Local
+    n -> error (show n ++ " is not a valid error code.")
+
+instance ToJSON ETA where
+  toJSON (ETA v) = toJSON v
+  toJSON NA      = Number (-1)
+  toJSON Unknown = Number (-2)
+
+instance FromJSON ETA where
+  parseJSON = withScientific "ETA" $ \case
+                                          (-1) -> pure NA
+                                          (-2) -> pure Unknown
+                                          v -> if v >= 0 then pure (ETA . fromRational . toRational $ v) else prependFailure "Parsing ETA failed: " (fail ("Not an ETA " ++ show v))
+
+instance ToJSON Status where
+  toJSON Stopped         = Number 0
+  toJSON CheckPending    = Number 1
+  toJSON Checking        = Number 2
+  toJSON DownloadPending = Number 3
+  toJSON Downloading     = Number 4
+  toJSON SeedPending     = Number 5
+  toJSON Seeding         = Number 6
+
+instance FromJSON Status where
+  parseJSON = withScientific "Status" $ \case
+                                              0 -> pure Stopped
+                                              1 -> pure CheckPending
+                                              2 -> pure Checking
+                                              3 -> pure DownloadPending
+                                              4 -> pure Downloading
+                                              5 -> pure SeedPending
+                                              6 -> pure Seeding
+                                              v -> prependFailure "Parsing Status failed: " (fail ("not a Status value " ++ show v)) 
 
 newClient :: (Prim :> es) => URI -> Session -> Options -> Int -> Eff es Client
 newClient uri session opts pv = do
