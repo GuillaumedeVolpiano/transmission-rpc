@@ -79,6 +79,7 @@ module Transmission.RPC.Session
   uploadSpeed,
   cumulativeStats,
   currentStats,
+  emptySessionStats,
   Stats,
   uploadedBytes,
   downloadedBytes,
@@ -393,3 +394,8 @@ modifySession oldS newS = Session
   (utpEnabled newS <|> utpEnabled oldS)
   (version newS <|> version oldS)
 
+emptyStats :: Stats
+emptyStats = Stats 0 0 0 0 0
+
+emptySessionStats :: SessionStats
+emptySessionStats = SessionStats 0 0 0 0 0 emptyStats emptyStats
