@@ -104,7 +104,7 @@ data ETA where
   ETA :: NominalDiffTime -> ETA
   NA :: ETA
   Unknown :: ETA
-  deriving Show
+  deriving (Show, Eq, Ord)
 
 data Status = Stopped | CheckPending | Checking | DownloadPending | Downloading | SeedPending | Seeding deriving (Show, Eq)
 
