@@ -35,76 +35,81 @@ module Transmission.RPC.Client (
   , groupsGet
   )
 where
-import           Control.Applicative             ((<|>))
-import           Control.Lens                    ((.~))
-import           Control.Lens.Operators          ((&), (^.))
-import           Control.Monad                   ((>=>))
-import           Data.Aeson                      (FromJSON, Key, ToJSON,
-                                                  Value (Array, Null, Object),
-                                                  fromJSON, object, toJSON,
-                                                  (.=))
-import qualified Data.Aeson                      as A (Result (..))
-import           Data.Aeson.Key                  (fromString)
-import           Data.Aeson.KeyMap               (KeyMap)
-import qualified Data.Aeson.KeyMap               as K (insert, lookup, member,
-                                                       singleton)
-import           Data.Aeson.Parser               (json)
-import           Data.Attoparsec.ByteString.Lazy (Result (..), parse)
-import           Data.ByteString                 (ByteString)
-import qualified Data.ByteString.Lazy            as L (ByteString)
-import           Data.Fixed                      (E3, Fixed, showFixed)
-import           Data.Functor                    (void)
-import qualified Data.HashSet                    as S (fromList)
-import           Data.List                       (intersperse)
-import           Data.Map                        (Map, (!))
-import           Data.Maybe                      (catMaybes, fromMaybe, fromJust)
-import           Data.Text                       (Text)
-import qualified Data.Text                       as T (pack)
-import qualified Data.Vector                     as V (toList, head)
-import           Effectful                       (Eff, (:>))
-import           Effectful.Error.Static          (HasCallStack)
-import           Effectful.Exception             (throwIO, try)
-import           Effectful.FileSystem            (FileSystem)
-import           Effectful.Log                   (Log, logAttention_, logInfo_)
-import           Effectful.Prim.IORef            (Prim, modifyIORef, readIORef)
-import           Effectful.Reader.Static         (Reader, asks)
-import           Effectful.Time                  (Time, monotonicTime)
-import           Effectful.Wreq                  (Options, Response, Wreq,
-                                                  defaults, header, manager,
-                                                  responseBody, responseHeader,
-                                                  responseStatus, statusCode)
-import           Effectful.Wreq.Session          (Session, get, newSession,
-                                                  postWith)
-import Network.Wreq.Types (Postable)
-import           Network.HTTP.Client             (HttpException (HttpExceptionRequest),
-                                                  HttpExceptionContent (StatusCodeException),
-                                                  defaultManagerSettings,
-                                                  managerResponseTimeout,
-                                                  responseTimeoutMicro)
-import           Transmission.RPC.Constants      (Priority, defaultTimeout,
-                                                  sessionIdHeaderName)
-import           Transmission.RPC.Enum           (EncryptionMode, IdleMode,
-                                                  RatioLimitMode)
-import           Transmission.RPC.Errors         (TransmissionContext (..),
-                                                  TransmissionError (..))
-import qualified Transmission.RPC.Session        as TS (Session)
-import           Transmission.RPC.Session        (SessionStats, modifySession,
-                                                  rpcVersion, rpcVersionSemver,
-                                                  version)
-import           Transmission.RPC.Torrent        (Torrent, toId, mkTorrent)
-import qualified Transmission.RPC.Types          as TT (getSession)
-import           Transmission.RPC.Types          (Client, ID (..), IDs (..),
-                                                  Label, RPCMethod (..),
-                                                  Timeout, TorrentRef (..),
-                                                  getHttpSession, getOpts,
-                                                  getProtocolVersion,
-                                                  getSemVerVersion,
-                                                  getServerVersion, getURI,
-                                                  newClient)
-import           Transmission.RPC.Utils          (getTorrentArguments)
-import Data.Text.Encoding (decodeUtf8)
+import           Control.Applicative                ((<|>))
+import           Control.Lens                       ((.~))
+import           Control.Lens.Operators             ((&), (^.))
+import           Control.Monad                      ((>=>))
+import           Data.Aeson                         (FromJSON, Key, ToJSON,
+                                                     Value (Array, Null, Object),
+                                                     fromJSON, object, toJSON,
+                                                     (.=))
+import qualified Data.Aeson                         as A (Result (..))
+import           Data.Aeson.Key                     (fromString)
+import           Data.Aeson.KeyMap                  (KeyMap)
+import qualified Data.Aeson.KeyMap                  as K (insert, lookup,
+                                                          member, singleton)
+import           Data.Aeson.Parser                  (json)
+import           Data.Attoparsec.ByteString.Lazy    (Result (..), parse)
+import           Data.ByteString                    (ByteString)
+import qualified Data.ByteString.Lazy               as L (ByteString)
+import           Data.Fixed                         (E3, Fixed, showFixed)
+import           Data.Functor                       (void)
+import qualified Data.HashSet                       as S (fromList)
+import           Data.List                          (intersperse)
+import           Data.Map                           (Map, (!))
+import           Data.Maybe                         (catMaybes, fromJust,
+                                                     fromMaybe)
+import           Data.Text                          (Text)
+import qualified Data.Text                          as T (pack)
+import           Data.Text.Encoding                 (decodeUtf8)
+import qualified Data.Vector                        as V (head, toList)
+import           Effectful                          (Eff, (:>))
+import           Effectful.Error.Static             (HasCallStack)
+import           Effectful.Exception                (throwIO, try)
+import           Effectful.FileSystem               (FileSystem)
+import           Effectful.FileSystem.IO.ByteString (hGetContents)
 import qualified Effectful.FileSystem.IO.ByteString as FS
-import Effectful.FileSystem.IO.ByteString (hGetContents)
+import           Effectful.Log                      (Log, logAttention_,
+                                                     logInfo_)
+import           Effectful.Prim.IORef               (Prim, modifyIORef,
+                                                     readIORef)
+import           Effectful.Reader.Static            (Reader, asks)
+import           Effectful.Time                     (Time, monotonicTime)
+import           Effectful.Wreq                     (Options, Response, Wreq,
+                                                     defaults, header, manager,
+                                                     responseBody,
+                                                     responseHeader,
+                                                     responseStatus, statusCode)
+import           Effectful.Wreq.Session             (Session, get, newSession,
+                                                     postWith)
+import           Network.HTTP.Client                (HttpException (HttpExceptionRequest),
+                                                     HttpExceptionContent (StatusCodeException),
+                                                     defaultManagerSettings,
+                                                     managerResponseTimeout,
+                                                     responseTimeoutMicro)
+import           Network.Wreq.Types                 (Postable)
+import           Transmission.RPC.Constants         (Priority, defaultTimeout,
+                                                     sessionIdHeaderName)
+import           Transmission.RPC.Enum              (EncryptionMode, IdleMode,
+                                                     RatioLimitMode)
+import           Transmission.RPC.Errors            (TransmissionContext (..),
+                                                     TransmissionError (..))
+import qualified Transmission.RPC.Session           as TS (Session)
+import           Transmission.RPC.Session           (SessionStats,
+                                                     modifySession, rpcVersion,
+                                                     rpcVersionSemver, version)
+import           Transmission.RPC.Torrent           (Torrent, mkTorrent, toId)
+import qualified Transmission.RPC.Types             as TT (getSession)
+import           Transmission.RPC.Types             (Client, ID (..), IDs (..),
+                                                     Label, RPCMethod (..),
+                                                     Timeout, TorrentRef (..),
+                                                     getHttpSession, getOpts,
+                                                     getProtocolVersion,
+                                                     getSemVerVersion,
+                                                     getServerVersion, getURI,
+                                                     newClient)
+import           Transmission.RPC.Utils             (getTorrentArguments)
+
 
 -- constants
 currentProtocolVersion :: Int
@@ -418,8 +423,8 @@ safeRequest query timeout = do
     Left e -> throwIO e
 
 request :: (HasCallStack, Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
-request _ _ Nothing True _ = error "request requires ids"
-request _ _ (Just (IDs [])) True _ = error "request requires ids"
+request _ _ Nothing True _ = error "request requires ids, received nothing"
+request _ _ (Just (IDs [])) True _ = error "request requires ids, received empty list"
 request rpcm args ids _ timeout = do
   let args' = maybe id (valueInsert "ids") ids . fromMaybe Null $ args
       query = object [("method", toJSON rpcm), ("arguments", args')]
