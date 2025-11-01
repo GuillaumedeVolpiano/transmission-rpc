@@ -23,6 +23,7 @@ module Transmission.RPC.Torrent
   , haveValid
   , honorsSessionLimits
   , isFinished
+  , isPrivate
   , labels
   , leftUntilDone
   , metadataPercentComplete
