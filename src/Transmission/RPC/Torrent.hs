@@ -9,6 +9,7 @@ module Transmission.RPC.Torrent
   , availability
   , bandwidthPriority
   , corruptEver
+  , comment
   , hashString
   , desiredAvailable
   , downloadDir
