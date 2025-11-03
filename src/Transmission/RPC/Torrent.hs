@@ -102,6 +102,23 @@ module Transmission.RPC.Torrent
   -- * shared functions
   , priority
   , mkTorrent
+  , Peer
+  , address
+  , clientName
+  , clientIsChoked
+  , clientIsInterested
+  , flagStr
+  , isDownloadingFrom
+  , isEncrypted
+  , isIncoming
+  , isUploadingTo
+  , isUTP
+  , peerIsChoked
+  , peerIsInterested
+  , port
+  , pProgress
+  , rateToClient
+  , rateToPeer
   )
 
 where
