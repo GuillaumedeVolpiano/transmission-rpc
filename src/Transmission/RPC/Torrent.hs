@@ -64,6 +64,8 @@ module Transmission.RPC.Torrent
   -- Files
   , File
   , fName
+  , fLength
+  , fBytesCompleted
   -- * File Statistics
   , FileStat
   , bytesCompleted
