@@ -71,6 +71,10 @@ module Transmission.RPC.Torrent
   , bytesCompleted
   -- * Tracker
   , Tracker
+  , tid
+  , tAnnounce
+  , tScrape
+  , tTier
   -- * Status
   , Status (..)
   -- Tracker stats
