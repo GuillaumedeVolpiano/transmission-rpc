@@ -85,7 +85,7 @@ import           Effectful.Wreq                     (Options, Response, Wreq,
 import           Effectful.Wreq.Session             (Session, get, newSession,
                                                      postWith)
 import           Network.HTTP.Client                (HttpException (HttpExceptionRequest),
-                                                     HttpExceptionContent (StatusCodeException),
+                                                     HttpExceptionContent (StatusCodeException, ResponseTimeout),
                                                      defaultManagerSettings,
                                                      managerResponseTimeout,
                                                      responseTimeoutMicro)
@@ -435,7 +435,7 @@ getSessionId url sesh = do
                     sessionId (Left e) = throwIO e
                 sessionId failGet
 
-safeRequest :: (Prim :> es, Wreq :> es, Client :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
+safeRequest :: (Prim :> es, Wreq :> es, Client :> es, Log :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
 safeRequest query timeout = do
   optsRef <- getOpts
   opts <- readIORef optsRef
@@ -450,6 +450,7 @@ safeRequest query timeout = do
           modifyIORef optsRef (\o -> o & header sessionIdHeaderName .~ [sessionId])
           safeRequest query timeout
       else throwIO e
+    Left (HttpExceptionRequest _ ResponseTimeout) -> logInfo_ "Response Timeout" >> safeRequest query timeout
     Left e -> throwIO e
 
 request :: (HasCallStack, Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
