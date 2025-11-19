@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators     #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DataKinds #-}
 
 module Transmission.RPC.Client (
   -- * Reexports from Transmission.RPC.Types
@@ -33,6 +35,7 @@ module Transmission.RPC.Client (
   , setGroup
   , groupGet
   , groupsGet
+  , runClient
   )
 where
 import           Control.Applicative                ((<|>))
@@ -63,7 +66,7 @@ import           Data.Text                          (Text)
 import qualified Data.Text                          as T (pack)
 import           Data.Text.Encoding                 (decodeUtf8)
 import qualified Data.Vector                        as V (head, toList)
-import           Effectful                          (Eff, (:>))
+import           Effectful                          (Eff, (:>), Effect, DispatchOf, Dispatch(Static), IOE)
 import           Effectful.Error.Static             (HasCallStack)
 import           Effectful.Exception                (throwIO, try)
 import           Effectful.FileSystem               (FileSystem)
@@ -72,8 +75,7 @@ import qualified Effectful.FileSystem.IO.ByteString as FS
 import           Effectful.Log                      (Log, logAttention_,
                                                      logInfo_)
 import           Effectful.Prim.IORef               (Prim, modifyIORef,
-                                                     readIORef)
-import           Effectful.Reader.Static            (Reader, asks)
+                                                     readIORef, IORef)
 import           Effectful.Time                     (Time, monotonicTime)
 import           Effectful.Wreq                     (Options, Response, Wreq,
                                                      defaults, header, manager,
@@ -99,24 +101,52 @@ import           Transmission.RPC.Session           (SessionStats,
                                                      modifySession, rpcVersion,
                                                      rpcVersionSemver, version)
 import           Transmission.RPC.Torrent           (Torrent, mkTorrent, toId)
-import qualified Transmission.RPC.Types             as TT (getSession)
-import           Transmission.RPC.Types             (Client, ID (..), IDs (..),
+import qualified Transmission.RPC.Types             as TT (getSession, Client, getProtocolVersion, getOpts, getHttpSession, getURI, getServerVersion, getSemVerVersion)
+import           Transmission.RPC.Types             (ID (..), IDs (..),
                                                      Label, RPCMethod (..),
                                                      Timeout, TorrentRef (..),
-                                                     getHttpSession, getOpts,
-                                                     getProtocolVersion,
-                                                     getSemVerVersion,
-                                                     getServerVersion, getURI,
                                                      newClient)
 import           Transmission.RPC.Utils             (getTorrentArguments)
+import Effectful.Dispatch.Static (SideEffects(WithSideEffects), StaticRep, getStaticRep, evalStaticRep)
 
+data Client :: Effect
+
+type instance DispatchOf Client = Static WithSideEffects
+
+newtype instance StaticRep Client = Client { getClient :: TT.Client }
+
+-- Effectful methods
+
+getProtocolVersion :: Client :> es => Eff es (IORef Int) 
+getProtocolVersion = TT.getProtocolVersion . getClient <$> getStaticRep
+
+getOpts :: Client :> es => Eff es (IORef Options) 
+getOpts = TT.getOpts . getClient <$> getStaticRep
+
+getHttpSession :: Client :> es => Eff es Session 
+getHttpSession = TT.getHttpSession . getClient <$> getStaticRep
+
+getURI :: Client :> es => Eff es String 
+getURI = TT.getURI . getClient <$> getStaticRep
+
+getClientSession :: Client :> es => Eff es (IORef TS.Session) 
+getClientSession = TT.getSession . getClient <$> getStaticRep
+
+getServerVersion :: Client :> es => Eff es (IORef (Maybe Text))
+getServerVersion = TT.getServerVersion . getClient <$> getStaticRep
+
+getSemVerVersion :: Client :> es => Eff es (IORef (Maybe Text))
+getSemVerVersion = TT.getSemVerVersion . getClient <$> getStaticRep
+
+runClient :: (IOE :> es) => TT.Client -> Eff (Client : es) a -> Eff es a
+runClient = evalStaticRep . Client
 
 -- constants
 currentProtocolVersion :: Int
 currentProtocolVersion = 17
 
 -- | Create a client from a URL, a timeout and a Logger
-fromUrl :: (Prim :> es, Wreq :> es) => String -> Maybe Options -> Timeout -> Eff es Client
+fromUrl :: (Prim :> es, Wreq :> es) => String -> Maybe Options -> Timeout -> Eff es TT.Client
 fromUrl url opts timeout =  do
                       sesh <- newSession
                       sessionId <- getSessionId url sesh
@@ -126,7 +156,7 @@ fromUrl url opts timeout =  do
 
 
 -- | Add a torrent to the transfer list
-addTorrent :: (FileSystem :> es, Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
+addTorrent :: (FileSystem :> es, Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
 addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority =
   do
                                      torrentData <- (
@@ -151,30 +181,30 @@ addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit p
 
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
 -- transmission daemon if Bool is True
-deleteTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
+deleteTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
 deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [("delete-local-data", toJSON deleteData)]) (Just ids) True
 
 -- | Starttorrent(s) with provided id(s)
-startTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
+startTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
 startTorrent ids bypassQueue = void . request (if bypassQueue then TorrentStartNow else TorrentStart) Nothing (Just ids) True
 
 -- | Start all torrents respecting the queue order
-startAll :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
+startAll :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
 startAll bypassQueue timeout = do
   let method = if bypassQueue then TorrentStartNow else TorrentStart
   ids <- IDs . map (ID . fromJust . toId) <$> getTorrents Nothing (Just []) Nothing
   void . request method Nothing (Just ids) True $ timeout
 
 -- | Stop torrent(s) with provided id(s)
-stopTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+stopTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 stopTorrent ids = void . request TorrentStop Nothing (Just ids) True
 
 -- | Verify torrent(s) with provided id(s)
-verifyTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+verifyTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 verifyTorrent ids = void . request TorrentVerify Nothing (Just ids) True
 
 -- | Reannounce torrent(s) with provided id(s)
-reannounceTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+reannounceTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 
 -- | Get information for torrent with provided id. arguments contains a list of field names to be returned, when arguments=None (default), all fields are requested. See the Torrent class for more information.
@@ -186,7 +216,7 @@ reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 --
 --            For example, fetch all fields from transmission daemon with 1500 torrents would take ~5s,
 --            but is only ~0.2s if to fetch 6 fields.
-getTorrent :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => ID -> Maybe [Text] -> Timeout -> Eff es Torrent
+getTorrent :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => ID -> Maybe [Text] -> Timeout -> Eff es Torrent
 getTorrent toID fields timeout = do
   torrents <- getTorrents (Just . IDs $ [toID]) fields timeout
   case torrents of
@@ -195,7 +225,7 @@ getTorrent toID fields timeout = do
     _ -> throwIO . TransmissionError $ TransmissionContext ("Received more than one torrent: " ++ show torrents) (Just TorrentGet) Nothing Nothing Nothing Nothing
 
 -- | Get information for torrents with provided ids. For more information see Client.get_torrent().
-getTorrents :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [Text] -> Timeout -> Eff es [Torrent]
+getTorrents :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [Text] -> Timeout -> Eff es [Torrent]
 getTorrents ids fields timeout = do
   args <- buildArguments fields
   response <- request TorrentGet (Just . object $ [("fields", args)]) ids False timeout
@@ -209,7 +239,7 @@ getTorrents ids fields timeout = do
 
 -- | Get information for torrents for recently active torrent. If you want to get recently-removed torrents. you should use this method.
 -- Returns a list of active torrents and a list of ids of recently removed torrents
-getRecentlyActiveTorrents :: (Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es ([Torrent], IDs)
+getRecentlyActiveTorrents :: (Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es ([Torrent], IDs)
 getRecentlyActiveTorrents fields timeout = do
   args <- buildArguments fields
   result <- request TorrentGet (Just . object $ [("fields", args)]) (Just RecentlyActive) False timeout
@@ -229,7 +259,7 @@ getRecentlyActiveTorrents fields timeout = do
   pure (tors, IDs removed)
 
 -- | change torrent(s) parameters for the torrents with the supplied id(s)
-changeTorrents :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Maybe Priority -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe FilePath -> Maybe Int -> Maybe [Priority] -> Maybe [Priority] -> Maybe [Priority] -> Maybe Int -> Maybe Int -> Maybe IdleMode -> Maybe Rational -> Maybe RatioLimitMode -> Maybe [Text] -> Maybe Text -> Maybe Text -> Maybe [[Text]] -> Maybe [(Int, Text)] -> Maybe [Int] -> [(Key, Value)] -> Eff es ()
+changeTorrents :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Maybe Priority -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe FilePath -> Maybe Int -> Maybe [Priority] -> Maybe [Priority] -> Maybe [Priority] -> Maybe Int -> Maybe Int -> Maybe IdleMode -> Maybe Rational -> Maybe RatioLimitMode -> Maybe [Text] -> Maybe Text -> Maybe Text -> Maybe [[Text]] -> Maybe [(Int, Text)] -> Maybe [Int] -> [(Key, Value)] -> Eff es ()
 changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploadLimit uploadLimited filesUnwanted filesWanted honorsSessionsLimits location peerLimit priorityHigh priorityLow priorityNormal queuePosition
   seedIdleLimit seedIdleMode seedRatioLimit seedRatioMode trackerAdd labels group trackerList trackerReplace trackerRemove additionalArgs = do
     let args = (additionalArgs ++) . catMaybes $ [("bandwidthPriority" .=) <$> bandwidthPriority, ("downloadLimit" .=) <$> downloadLimit, ("downloadLimited" .=) <$> downloadLimited, ("uploadLimit" .=) <$> uploadLimit,
@@ -244,13 +274,13 @@ changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploa
 
 
 -- | Move torrent data to a new location
-moveTorrentData :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> FilePath -> Timeout -> Bool -> Eff es ()
+moveTorrentData :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> FilePath -> Timeout -> Bool -> Eff es ()
 moveTorrentData ids location timeout move = do
   let args = object ["location" .= location, "move" .= move]
   void $ request TorrentSetLocation (Just args) (Just ids) True timeout
 
 -- | Rename the path of a torrent, doesn't move it.
-renameTorrentPath :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => ID -> FilePath -> Text -> Timeout -> Eff es (Text, Text)
+renameTorrentPath :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => ID -> FilePath -> Text -> Timeout -> Eff es (Text, Text)
 renameTorrentPath toID location name timeout = do
   result <- request TorrentRenamePath (Just . object $ ["path" .= location, "name" .= name]) (Just . IDs $ [toID]) True timeout
   case (fromJSON result :: A.Result (Map Text Text)) of
@@ -258,23 +288,23 @@ renameTorrentPath toID location name timeout = do
     A.Success km -> pure (km ! "path", km ! "name")
 
 -- | Move transfer to the top of the queue
-queueTop :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueTop :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 queueTop ids timeout = void $ request QueueMoveTop Nothing (Just ids) True timeout
 
 -- | Move transfer to the bottom of the queue
-queueBottom :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueBottom :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 queueBottom ids timeout = void $ request QueueMoveBottom Nothing (Just ids) True timeout
 
 -- | Move transfer up in the queue
-queueUp :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueUp :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 queueUp ids timeout = void $ request QueueMoveUp Nothing (Just ids) True timeout
 
 -- | Move transfer down in the queue
-queueDown :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueDown :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
 queueDown ids timeout = void $ request QueueMoveDown Nothing (Just ids) True timeout
 
 -- | Get Session parameters
-getSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es TS.Session
+getSession :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es TS.Session
 getSession fields timeout = do
   response <- request SessionGet ((\f -> object [("fields", toJSON f)]) <$> fields) Nothing False timeout
   case fromJSON response of
@@ -282,7 +312,7 @@ getSession fields timeout = do
     A.Success s -> updateVersions >> pure s
 
 -- | Set Session parameters
-setSession :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
+setSession :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
 setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDay altSpeedTimeEnabled altSpeedTimeEnd altSpeedUp blocklistEnabled blockListURL cacheSizeMB dhtEnabled defaultTrackers downloadDir downloadQueueEnabled downloadQueueSize encryption idleSeedingLimit idleSeedingLimitEnabled incompleteDir incompleteDirEnabled lpdEnabled peerLimitGlobal peerLimitPerTorrent peerPort peerPortRandomOnStart pexEnabled portForwardingEnabled queueStalledEnabled queueStalledMinutes renamePartialFiles scriptTorrentDoneEnabled scriptTorrentDoneFilename seedQueueEnabled seedQueueSize seedRatioLimit seedRatioLimited speedLimitDown speedLimitDownEnabled speedLimitUp speedLimitUpEnabled startAddedTorrents trashOriginalTorrentFile utpEnabled scriptTorrentDoneSeedingFilename scriptTorrentDoneSeedingEnabled scriptTorrentAddedEnabled scriptTorrentAddedFilename additionalArgs = do
     let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown
                                                  , ("alt-speed-enabled" .=) <$> altSpeedEnabled
@@ -336,7 +366,7 @@ setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDa
 
 -- | Update blocklist. Returns the size of the blocklist
 
-blocklistUpdate :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
+blocklistUpdate :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
 blocklistUpdate timeout = do
   result <- request BlocklistUpdate Nothing Nothing False timeout
   case fromJSON result of
@@ -345,17 +375,17 @@ blocklistUpdate timeout = do
 
 -- | Tests to see if the incoming peer port is accessible from the outside world.
 
-portTest :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
+portTest :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
 portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout
 
 -- | Get the amount of free space (in bytes) at the provided location.
 
-freeSpace :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
+freeSpace :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
 freeSpace fp timeout = extractFieldFromValue "size-bytes" <$> request FreeSpace (Just . object $ [("path", toJSON fp)]) Nothing False timeout
 
 -- | Get Session statistics
 
-sessionStats :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es SessionStats
+sessionStats :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Timeout -> Eff es SessionStats
 sessionStats timeout = do
   result <- request SessionStats Nothing Nothing False timeout
   case fromJSON result of
@@ -364,7 +394,7 @@ sessionStats timeout = do
 
 -- | create or update a Bandwidth group
 
-setGroup :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
+setGroup :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
 setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown speedLimitUpEnabled speedLimitUp =
   do
     let args = object . catMaybes $ [Just ("name" .= name), ("honorsSessionLimits" .= ) <$> honorsSessionLimits
@@ -376,17 +406,17 @@ setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown s
 
 -- | Access Infos about a Bandwidth Group
 
-groupGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value
+groupGet :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value
 groupGet name timeout = V.head . extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ name) Nothing False timeout
 
 -- | Access infos about a list of Bandwidth groups or all of them (if the list is empty)
-groupsGet :: (Prim :> es, Reader Client :> es, Wreq :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
+groupsGet :: (Prim :> es, Client :> es, Wreq :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
 groupsGet names timeout = extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ names) Nothing False timeout
 
 -- Utility functions
 
-buildArguments :: (Prim :> es, Reader Client :> es) => Maybe [Text] -> Eff es Value
-buildArguments fields = asks getProtocolVersion >>= (readIORef
+buildArguments :: (Prim :> es, Client :> es) => Maybe [Text] -> Eff es Value
+buildArguments fields = getProtocolVersion >>= (readIORef
    >=>
      (\ protocolVersion
         -> pure
@@ -405,12 +435,12 @@ getSessionId url sesh = do
                     sessionId (Left e) = throwIO e
                 sessionId failGet
 
-safeRequest :: (Prim :> es, Wreq :> es, Reader Client :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
+safeRequest :: (Prim :> es, Wreq :> es, Client :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
 safeRequest query timeout = do
-  optsRef <- asks getOpts
+  optsRef <- getOpts
   opts <- readIORef optsRef
-  sesh <- asks getHttpSession
-  uri <- asks getURI
+  sesh <- getHttpSession
+  uri <- getURI
   let opts' = maybe opts (\t -> opts & manager .~ Left (defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro t})) timeout
   unsafePost <- try (postWith opts' sesh uri query)
   case unsafePost of
@@ -422,7 +452,7 @@ safeRequest query timeout = do
       else throwIO e
     Left e -> throwIO e
 
-request :: (HasCallStack, Wreq :> es, Prim :> es, Reader Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
+request :: (HasCallStack, Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
 request _ _ Nothing True _ = error "request requires ids, received nothing"
 request _ _ (Just (IDs [])) True _ = error "request requires ids, received empty list"
 request rpcm args ids _ timeout = do
@@ -435,7 +465,7 @@ request rpcm args ids _ timeout = do
   let body = parse json $ response ^. responseBody
   examineBody body rpcm query response
 
-examineBody :: (Prim :> es, Reader Client :> es, Log :> es) => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es Value
+examineBody :: (Prim :> es, Client :> es, Log :> es) => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es Value
 examineBody (Fail _ _ e) rpcm query response = logInfo_ (T.pack $ "Error:\n" ++ "Request: " ++ show query ++ "\n" ++ "HTTP Data: " ++  show response) >> throwIO (TransmissionError (TransmissionContext ("failed to parse response as JSON:\n" ++ show e) (Just rpcm ) (Just query) Nothing (Just response) Nothing))
 examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.lookup "result" bodyMap of
                                         Nothing -> throwIO . TransmissionError $ TransmissionContext "Query failed, response data missing result:\n" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
@@ -473,20 +503,20 @@ valueInsert key value (Object km ) = Object . K.insert (fromString key) (toJSON 
 valueInsert key value Null = Object . K.singleton (fromString key) $ toJSON value
 valueInsert key value v = error (show v ++ " is not an Object and not Null, cannot insert value " ++ (show . toJSON $ value) ++ " for key " ++ key)
 
-updateSession :: (Reader Client :> es, Prim :> es) => Value -> Eff es ()
+updateSession :: (Client :> es, Prim :> es) => Value -> Eff es ()
 updateSession v = do
-  curSesh <- asks TT.getSession
+  curSesh <- getClientSession
   let newSesh = case fromJSON v of
                   A.Error s   -> error s
                   A.Success s -> s
   modifyIORef curSesh (modifySession newSesh)
 
-updateVersions :: (Prim :> es, Reader Client :> es) => Eff es ()
+updateVersions :: (Prim :> es, Client :> es) => Eff es ()
 updateVersions = do
-  seshRef <- asks TT.getSession
-  pv <- asks getProtocolVersion
-  srv <- asks getServerVersion
-  smv <- asks getSemVerVersion
+  seshRef <- getClientSession
+  pv <- getProtocolVersion
+  srv <- getServerVersion
+  smv <- getSemVerVersion
   sesh <- readIORef seshRef
   modifyIORef pv (maybe id const $ rpcVersion sesh)
   modifyIORef srv (version sesh <|>)
