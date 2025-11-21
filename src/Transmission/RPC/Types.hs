@@ -9,7 +9,6 @@ module Transmission.RPC.Types
   -- * Client
 
   Client ()
-  , Scheme (..)
   , Username
   , Password
   , Host
@@ -74,8 +73,6 @@ data Client where
                getSemVerVersion :: IORef (Maybe Text)} ->
               Client
 
-data Scheme = HTTP | HTTPS deriving (Show, Read)
-
 data TorrentRef = TorrentURI URI | Binary Handle | TorrentContent ByteString | Path FilePath deriving Show
 
 data TorrentObject = TorrentObject deriving Show
@@ -90,7 +87,7 @@ type Host = String
 type Port = Int
 type Path = String
 type Timeout = Maybe Int
-type Label = String
+type Label = Text
 
 data RPCMethod = GroupSet | GroupGet | QueueMoveBottom | QueueMoveDown | QueueMoveTop | QueueMoveUp | TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 

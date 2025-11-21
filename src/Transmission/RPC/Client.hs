@@ -1,8 +1,9 @@
+{-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies      #-}
 {-# LANGUAGE TypeOperators     #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE DataKinds #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Transmission.RPC.Client (
   -- * Reexports from Transmission.RPC.Types
@@ -54,6 +55,7 @@ import qualified Data.Aeson.KeyMap                  as K (insert, lookup,
 import           Data.Aeson.Parser                  (json)
 import           Data.Attoparsec.ByteString.Lazy    (Result (..), parse)
 import           Data.ByteString                    (ByteString)
+import qualified Data.ByteString.Base64             as B64 (encode)
 import qualified Data.ByteString.Lazy               as L (ByteString)
 import           Data.Fixed                         (E3, Fixed, showFixed)
 import           Data.Functor                       (void)
@@ -64,18 +66,25 @@ import           Data.Maybe                         (catMaybes, fromJust,
                                                      fromMaybe)
 import           Data.Text                          (Text)
 import qualified Data.Text                          as T (pack)
-import           Data.Text.Encoding                 (decodeUtf8)
+import qualified Data.Text.Encoding                 as TE (decodeUtf8)
+import           Data.Text.Encoding.Error           (UnicodeException (DecodeError))
 import qualified Data.Vector                        as V (head, toList)
-import           Effectful                          (Eff, (:>), Effect, DispatchOf, Dispatch(Static), IOE)
+import           Effectful                          (Dispatch (Static),
+                                                     DispatchOf, Eff, Effect,
+                                                     IOE, (:>))
+import           Effectful.Dispatch.Static          (SideEffects (WithSideEffects),
+                                                     StaticRep, evalStaticRep,
+                                                     getStaticRep)
 import           Effectful.Error.Static             (HasCallStack)
-import           Effectful.Exception                (throwIO, try)
+import           Effectful.Exception                (fromException, throwIO,
+                                                     try)
 import           Effectful.FileSystem               (FileSystem)
 import           Effectful.FileSystem.IO.ByteString (hGetContents)
 import qualified Effectful.FileSystem.IO.ByteString as FS
 import           Effectful.Log                      (Log, logAttention_,
                                                      logInfo_)
-import           Effectful.Prim.IORef               (Prim, modifyIORef,
-                                                     readIORef, IORef)
+import           Effectful.Prim.IORef               (IORef, Prim, modifyIORef,
+                                                     readIORef)
 import           Effectful.Time                     (Time, monotonicTime)
 import           Effectful.Wreq                     (Options, Response, Wreq,
                                                      defaults, header, manager,
@@ -85,7 +94,7 @@ import           Effectful.Wreq                     (Options, Response, Wreq,
 import           Effectful.Wreq.Session             (Session, get, newSession,
                                                      postWith)
 import           Network.HTTP.Client                (HttpException (HttpExceptionRequest),
-                                                     HttpExceptionContent (StatusCodeException, ResponseTimeout),
+                                                     HttpExceptionContent (ResponseTimeout, StatusCodeException),
                                                      defaultManagerSettings,
                                                      managerResponseTimeout,
                                                      responseTimeoutMicro)
@@ -101,15 +110,19 @@ import           Transmission.RPC.Session           (SessionStats,
                                                      modifySession, rpcVersion,
                                                      rpcVersionSemver, version)
 import           Transmission.RPC.Torrent           (Torrent, mkTorrent, toId)
-import qualified Transmission.RPC.Types             as TT (getSession, Client, getProtocolVersion, getOpts, getHttpSession, getURI, getServerVersion, getSemVerVersion)
-import           Transmission.RPC.Types             (ID (..), IDs (..),
-                                                     Label, RPCMethod (..),
-                                                     Timeout, TorrentRef (..),
-                                                     newClient)
+import qualified Transmission.RPC.Types             as TT (Client,
+                                                           getHttpSession,
+                                                           getOpts,
+                                                           getProtocolVersion,
+                                                           getSemVerVersion,
+                                                           getServerVersion,
+                                                           getSession, getURI)
+import           Transmission.RPC.Types             (ID (..), IDs (..), Label,
+                                                     RPCMethod (..), Timeout,
+                                                     TorrentRef (..), newClient)
 import           Transmission.RPC.Utils             (getTorrentArguments)
-import Effectful.Dispatch.Static (SideEffects(WithSideEffects), StaticRep, getStaticRep, evalStaticRep)
 
-data Client :: Effect
+data Client :: Effect
 
 type instance DispatchOf Client = Static WithSideEffects
 
@@ -117,28 +130,28 @@ newtype instance StaticRep Client = Client { getClient :: TT.Client }
 
 -- Effectful methods
 
-getProtocolVersion :: Client :> es => Eff es (IORef Int) 
+getProtocolVersion :: Client :> es => Eff es (IORef Int)
 getProtocolVersion = TT.getProtocolVersion . getClient <$> getStaticRep
 
-getOpts :: Client :> es => Eff es (IORef Options) 
+getOpts :: Client :> es => Eff es (IORef Options)
 getOpts = TT.getOpts . getClient <$> getStaticRep
 
-getHttpSession :: Client :> es => Eff es Session 
+getHttpSession :: Client :> es => Eff es Session
 getHttpSession = TT.getHttpSession . getClient <$> getStaticRep
 
-getURI :: Client :> es => Eff es String 
+getURI :: Client :> es => Eff es String
 getURI = TT.getURI . getClient <$> getStaticRep
 
-getClientSession :: Client :> es => Eff es (IORef TS.Session) 
+getClientSession :: Client :> es => Eff es (IORef TS.Session)
 getClientSession = TT.getSession . getClient <$> getStaticRep
 
-getServerVersion :: Client :> es => Eff es (IORef (Maybe Text))
+getServerVersion :: Client :> es => Eff es (IORef (Maybe Text))
 getServerVersion = TT.getServerVersion . getClient <$> getStaticRep
 
 getSemVerVersion :: Client :> es => Eff es (IORef (Maybe Text))
 getSemVerVersion = TT.getSemVerVersion . getClient <$> getStaticRep
 
-runClient :: (IOE :> es) => TT.Client -> Eff (Client : es) a -> Eff es a
+runClient :: (IOE :> es) => TT.Client -> Eff (Client : es) a -> Eff es a
 runClient = evalStaticRep . Client
 
 -- constants
@@ -157,27 +170,26 @@ fromUrl url opts timeout =  do
 
 -- | Add a torrent to the transfer list
 addTorrent :: (FileSystem :> es, Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
-addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority =
-  do
-                                     torrentData <- (
-                                                     case tref of
-                                                         TorrentURI u -> pure $ "filename" .= u
-                                                         Binary b -> ("metainfo" .=) . decodeUtf8 <$> hGetContents b
-                                                         TorrentContent c -> pure $ "metainfo" .= decodeUtf8 c
-                                                         Path p -> ("metainfo" .=) . decodeUtf8 <$> FS.readFile p
-                                                    ) :: (FileSystem :> es0) => Eff es0 (Key, Value)
-                                     let args = Just . object . (torrentData :) . catMaybes $ [("download-dir" .=) <$> downloadDir
-                                                                                              , ("files-unwanted" .=) <$> filesUnwanted
-                                                                                              , ("files-wanted" .=) <$> filesWanted
-                                                                                              , ("paused" .=) <$> paused
-                                                                                              , ("peerLimit" .=) <$> peerLimit
-                                                                                              , ("priority-high" .=) <$> priorityHigh
-                                                                                              , ("priority-low" .=) <$> priorityLow
-                                                                                              , ("priority-normal" .=) <$> priorityNormal
-                                                                                              , ("cookies" .=) <$> cookies
-                                                                                              , ("labels" .=) <$> labels
-                                                                                              , ("bandwidthPriority" .=) <$> bandwidthPriority]
-                                     mkTorrent <$> request TorrentAdd args Nothing False timeout
+addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority = do
+  torrentData <- (
+                  case tref of
+                      TorrentURI u -> pure $ "filename" .= u
+                      Binary b -> ("metainfo" .=) . TE.decodeUtf8 . B64.encode <$> hGetContents b
+                      TorrentContent c -> pure $ "metainfo" .= (TE.decodeUtf8 . B64.encode $ c)
+                      Path p -> ("metainfo" .=) . TE.decodeUtf8 . B64.encode <$> FS.readFile p
+                 ) :: (FileSystem :> es0) => Eff es0 (Key, Value)
+  let args = Just . object . (torrentData :) . catMaybes $ [("download-dir" .=) <$> downloadDir
+                                                           , ("files-unwanted" .=) <$> filesUnwanted
+                                                           , ("files-wanted" .=) <$> filesWanted
+                                                           , ("paused" .=) <$> paused
+                                                           , ("peerLimit" .=) <$> peerLimit
+                                                           , ("priority-high" .=) <$> priorityHigh
+                                                           , ("priority-low" .=) <$> priorityLow
+                                                           , ("priority-normal" .=) <$> priorityNormal
+                                                           , ("cookies" .=) <$> cookies
+                                                           , ("labels" .=) <$> labels
+                                                           , ("bandwidthPriority" .=) <$> bandwidthPriority]
+  mkTorrent <$> request TorrentAdd args Nothing False timeout
 
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
 -- transmission daemon if Bool is True
@@ -435,7 +447,7 @@ getSessionId url sesh = do
                     sessionId (Left e) = throwIO e
                 sessionId failGet
 
-safeRequest :: (Prim :> es, Wreq :> es, Client :> es, Log :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
+safeRequest :: (Prim :> es, Wreq :> es, Client :> es, Log :> es, Postable a) => a -> Timeout -> Eff es (Response L.ByteString)
 safeRequest query timeout = do
   optsRef <- getOpts
   opts <- readIORef optsRef
@@ -445,13 +457,26 @@ safeRequest query timeout = do
   unsafePost <- try (postWith opts' sesh uri query)
   case unsafePost of
     Right r -> pure r
-    Left e@(HttpExceptionRequest _ (StatusCodeException s _)) -> if s ^. (responseStatus . statusCode) == 409 then do
-          let sessionId = s ^. responseHeader sessionIdHeaderName
-          modifyIORef optsRef (\o -> o & header sessionIdHeaderName .~ [sessionId])
-          safeRequest query timeout
-      else throwIO e
-    Left (HttpExceptionRequest _ ResponseTimeout) -> logInfo_ "Response Timeout" >> safeRequest query timeout
-    Left e -> throwIO e
+    Left e -> do
+      logAttention_ . T.pack $ "Error " ++ show e
+      case fromException e of
+        Just (HttpExceptionRequest _ (StatusCodeException s _)) -> if s ^. (responseStatus . statusCode) == 409 then do
+            let sessionId = s ^. responseHeader sessionIdHeaderName
+            modifyIORef optsRef (\o -> o & header sessionIdHeaderName .~ [sessionId])
+            safeRequest query timeout
+          else throwIO e
+        Just (HttpExceptionRequest _ ResponseTimeout) -> logInfo_ "Response Timeout" >> safeRequest query timeout
+        Just e'@(HttpExceptionRequest _ _) -> (logAttention_ . T.pack $
+          "Other Http Exception" ++ show e') >> throwIO e'
+        _ -> case fromException e of
+               Just (DecodeError desc mByte) -> do
+                 let logMessageError = T.pack $ "Unicode decode error " ++ desc ++ ", problematic byte" ++ show mByte
+                 logInfo_ logMessageError
+                 throwIO e
+               _ -> do
+                 logAttention_ . T.pack $ show e
+                 throwIO e
+
 
 request :: (HasCallStack, Wreq :> es, Prim :> es, Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
 request _ _ Nothing True _ = error "request requires ids, received nothing"
