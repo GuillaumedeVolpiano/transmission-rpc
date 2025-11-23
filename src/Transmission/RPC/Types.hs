@@ -3,29 +3,17 @@
 {-# LANGUAGE GADTs             #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators     #-}
+{-# LANGUAGE TemplateHaskell   #-}
 module Transmission.RPC.Types
   (
   -- * Client
 
-  Client ()
-  , Username
+  Username
   , Password
   , Host
   , Port
   , Path
   , Timeout
-
-  -- ** Client getter methods
-  , getURI
-  , getSession
-  , getOpts
-  , getProtocolVersion
-  , getHttpSession
-  , getServerVersion
-  , getSemVerVersion
-  -- ** Client builder
-  , newClient
 
   -- * Torrent reference
   , TorrentRef (..)
@@ -44,6 +32,13 @@ module Transmission.RPC.Types
   , ETA(..)
 
   , Status(..)
+  , URI
+  , ClientRep (ClientRep)
+  , uri
+  , session
+  , protocolVersion
+  , serverVersion
+  , semVerVersion
  )
 where
 
@@ -52,26 +47,11 @@ import           Data.Aeson               (FromJSON, ToJSON, Value (Number),
 import           Data.Aeson.Types         (FromJSON (parseJSON), prependFailure)
 import           Data.ByteString          (ByteString)
 import           Data.Text                (Text)
-import           Effectful                (Eff, (:>))
+import           Data.Time                (NominalDiffTime)
 import           Effectful.FileSystem.IO  (Handle)
-import           Effectful.Internal.Monad (Prim)
-import           Effectful.Prim.IORef     (IORef, newIORef)
-import           Effectful.Wreq           (Options)
-import           Effectful.Wreq.Session   (Session)
 import           GHC.Generics             (Generic)
-import qualified Transmission.RPC.Session as TS (Session)
-import           Transmission.RPC.Session (emptySession)
-import Data.Time (NominalDiffTime)
-
-data Client where
-  Client :: {getURI :: URI,
-               getSession :: IORef TS.Session,
-               getHttpSession :: Session,
-               getOpts :: IORef Options,
-               getProtocolVersion :: IORef Int,
-               getServerVersion :: IORef (Maybe Text),
-               getSemVerVersion :: IORef (Maybe Text)} ->
-              Client
+import           Lens.Micro.TH            (makeLenses)
+import           Transmission.RPC.Session (Session)
 
 data TorrentRef = TorrentURI URI | Binary Handle | TorrentContent ByteString | Path FilePath deriving Show
 
@@ -88,6 +68,15 @@ type Port = Int
 type Path = String
 type Timeout = Maybe Int
 type Label = Text
+
+data ClientRep = ClientRep {
+               _uri             :: URI,
+               _session         :: Session,
+               _protocolVersion :: Int,
+               _serverVersion   :: Maybe Text,
+               _semVerVersion   :: Maybe Text}
+
+makeLenses ''ClientRep
 
 data RPCMethod = GroupSet | GroupGet | QueueMoveBottom | QueueMoveDown | QueueMoveTop | QueueMoveUp | TorrentAdd | TorrentGet | TorrentReannounce | TorrentRemove | TorrentSetLocation | TorrentSet | TorrentStart | TorrentStartNow | TorrentStop | TorrentVerify | SessionGet | SessionStats | PortTest | BlocklistUpdate | FreeSpace | TorrentRenamePath deriving Show
 
@@ -184,13 +173,5 @@ instance FromJSON Status where
                                               4 -> pure Downloading
                                               5 -> pure SeedPending
                                               6 -> pure Seeding
-                                              v -> prependFailure "Parsing Status failed: " (fail ("not a Status value " ++ show v)) 
+                                              v -> prependFailure "Parsing Status failed: " (fail ("not a Status value " ++ show v))
 
-newClient :: (Prim :> es) => URI -> Session -> Options -> Int -> Eff es Client
-newClient uri session opts pv = do
-  sesh <- newIORef emptySession
-  opts' <- newIORef opts
-  pv' <- newIORef pv
-  srv <- newIORef Nothing
-  smv <- newIORef Nothing
-  pure $ Client uri sesh session opts' pv' srv smv

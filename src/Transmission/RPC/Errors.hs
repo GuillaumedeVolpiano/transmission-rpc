@@ -8,7 +8,7 @@ where
 import           Data.Aeson.Types       (Value)
 import qualified Data.ByteString.Lazy   as L (ByteString)
 import           Effectful.Exception    (Exception)
-import           Effectful.Wreq         (Response)
+import           Network.HTTP.Client    (Response, Request)
 import           Transmission.RPC.Types (RPCMethod)
 
 data TransmissionError = TransmissionAuthError TransmissionContext
@@ -23,7 +23,7 @@ data TransmissionContext = TransmissionContext {
                                            , argument :: Maybe Value
                                            , jsonResponse :: Maybe Value
                                            , rawResponse :: Maybe (Response L.ByteString)
-                                           , sentRequest :: Maybe Value
+                                           , sentRequest :: Maybe Request
                                            } deriving Show
 
 
