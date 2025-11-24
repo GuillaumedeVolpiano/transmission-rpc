@@ -39,6 +39,7 @@ module Transmission.RPC.Types
   , protocolVersion
   , serverVersion
   , semVerVersion
+  , headers
  )
 where
 
@@ -52,6 +53,7 @@ import           Effectful.FileSystem.IO  (Handle)
 import           GHC.Generics             (Generic)
 import           Lens.Micro.TH            (makeLenses)
 import           Transmission.RPC.Session (Session)
+import Network.HTTP.Types (Header)
 
 data TorrentRef = TorrentURI URI | Binary Handle | TorrentContent ByteString | Path FilePath deriving Show
 
@@ -74,7 +76,8 @@ data ClientRep = ClientRep {
                _session         :: Session,
                _protocolVersion :: Int,
                _serverVersion   :: Maybe Text,
-               _semVerVersion   :: Maybe Text}
+               _semVerVersion   :: Maybe Text,
+               _headers :: [Header]}
 
 makeLenses ''ClientRep
 

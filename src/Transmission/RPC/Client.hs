@@ -2,14 +2,11 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies      #-}
-{-# LANGUAGE TypeOperators     #-}
-{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Transmission.RPC.Client (
   -- * Reexports from Transmission.RPC.Types
-  Client
   -- * Client methods
-  , addTorrent
+   addTorrent
   , deleteTorrent
   , startTorrent
   , startAll
@@ -38,10 +35,12 @@ module Transmission.RPC.Client (
   )
 where
 import           Control.Applicative                ((<|>))
+import           Control.Exception                  (fromException)
+import           Control.Monad.Time                 (monotonicTime)
 import           Data.Aeson                         (FromJSON, Key, ToJSON,
                                                      Value (Array, Null, Object),
-                                                     fromJSON, object, toJSON,
-                                                     (.=), encode)
+                                                     encode, fromJSON, object,
+                                                     toJSON, (.=))
 import qualified Data.Aeson                         as A (Result (..))
 import           Data.Aeson.Key                     (fromString)
 import           Data.Aeson.KeyMap                  (KeyMap)
@@ -63,26 +62,41 @@ import qualified Data.Text                          as T (pack)
 import qualified Data.Text.Encoding                 as TE (decodeUtf8)
 import           Data.Text.Encoding.Error           (UnicodeException (DecodeError))
 import qualified Data.Vector                        as V (head, toList)
-import           Effectful                          (Eff, (:>))
-import           Effectful.Error.Static             (HasCallStack)
-import           Effectful.Exception                (fromException, throwIO,
-                                                     try)
-import           Effectful.FileSystem               (FileSystem)
-import           Effectful.FileSystem.IO.ByteString (hGetContents)
-import qualified Effectful.FileSystem.IO.ByteString as FS
-import           Effectful.Log                      (Log, logAttention_,
-                                                     logInfo_)
-import           Effectful.Time                     (Time, monotonicTime)
+import           GHC.Stack                          (HasCallStack)
+import           Log                                (logAttention_, logInfo_)
 import           Network.HTTP.Client                (HttpException (HttpExceptionRequest),
                                                      HttpExceptionContent (ResponseTimeout),
-                                                     responseTimeoutMicro, Response, Request, responseTimeout, parseRequest_, requestBody, requestHeaders, RequestBody (..), responseStatus, responseHeaders, responseBody)
+                                                     Request, RequestBody (..),
+                                                     Response, parseRequest_,
+                                                     requestBody,
+                                                     requestHeaders,
+                                                     responseBody,
+                                                     responseHeaders,
+                                                     responseStatus,
+                                                     responseTimeout,
+                                                     responseTimeoutMicro)
 import qualified Network.HTTP.Client                as HC (method)
+import           Network.HTTP.Types                 (statusCode)
 import           Transmission.RPC.Constants         (Priority,
                                                      sessionIdHeaderName)
 import           Transmission.RPC.Enum              (EncryptionMode, IdleMode,
                                                      RatioLimitMode)
 import           Transmission.RPC.Errors            (TransmissionContext (..),
                                                      TransmissionError (..))
+import qualified Transmission.RPC.MonadTransmission as MT (readFile)
+import           Transmission.RPC.MonadTransmission (MonadClient,
+                                                     MonadTransmission,
+                                                     getClientSession,
+                                                     getProtocolVersion,
+                                                     getSemVerVersion,
+                                                     getServerVersion, getURI,
+                                                     hGetContents, httpLbs,
+                                                     setClientSession,
+                                                     setHeaders,
+                                                     setProtocolVersion,
+                                                     setSemVerVersion,
+                                                     setServerVersion, throwIO,
+                                                     try, getHeaders)
 import qualified Transmission.RPC.Session           as TS (Session)
 import           Transmission.RPC.Session           (SessionStats, rpcVersion,
                                                      rpcVersionSemver, version)
@@ -91,20 +105,17 @@ import           Transmission.RPC.Types             (ID (..), IDs (..), Label,
                                                      RPCMethod (..), Timeout,
                                                      TorrentRef (..), URI)
 import           Transmission.RPC.Utils             (getTorrentArguments)
-import Effectful.Network.HTTP.Client (HttpClient, httpLbs, setHeaders)
-import Effectful.RPC.Client (Client, getProtocolVersion, getURI, getClientSession, setClientSession, getServerVersion, getSemVerVersion, setProtocolVersion, setServerVersion, setSemVerVersion)
-import Network.HTTP.Types (statusCode)
 
 -- | Add a torrent to the transfer list
-addTorrent :: (FileSystem :> es, HttpClient :> es, Client :> es, Log :> es, Time :> es) => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> Eff es Torrent
+addTorrent :: MonadTransmission m => TorrentRef -> Timeout -> Maybe FilePath -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe Int -> Maybe [Int] -> Maybe [Int] -> Maybe [Int] -> Maybe Text -> Maybe [Label] -> Maybe Int -> m Torrent
 addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit priorityHigh priorityLow priorityNormal cookies labels bandwidthPriority = do
   torrentData <- (
                   case tref of
                       TorrentURI u -> pure $ "filename" .= u
                       Binary b -> ("metainfo" .=) . TE.decodeUtf8 . B64.encode <$> hGetContents b
                       TorrentContent c -> pure $ "metainfo" .= (TE.decodeUtf8 . B64.encode $ c)
-                      Path p -> ("metainfo" .=) . TE.decodeUtf8 . B64.encode <$> FS.readFile p
-                 ) :: (FileSystem :> es0) => Eff es0 (Key, Value)
+                      Path p -> ("metainfo" .=) . TE.decodeUtf8 . B64.encode <$> MT.readFile p
+                 ) :: MonadTransmission m => m (Key, Value)
   let args = Just . object . (torrentData :) . catMaybes $ [("download-dir" .=) <$> downloadDir
                                                            , ("files-unwanted" .=) <$> filesUnwanted
                                                            , ("files-wanted" .=) <$> filesWanted
@@ -120,30 +131,30 @@ addTorrent tref timeout downloadDir filesUnwanted filesWanted paused peerLimit p
 
 -- | Remove torrent(s) with provided id(s). Local data will be removed by
 -- transmission daemon if Bool is True
-deleteTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
+deleteTorrent :: MonadTransmission m => IDs -> Bool -> Timeout -> m ()
 deleteTorrent ids deleteData = void . request TorrentRemove (Just $ object [("delete-local-data", toJSON deleteData)]) (Just ids) True
 
 -- | Starttorrent(s) with provided id(s)
-startTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => IDs -> Bool -> Timeout -> Eff es ()
+startTorrent :: MonadTransmission m => IDs -> Bool -> Timeout -> m ()
 startTorrent ids bypassQueue = void . request (if bypassQueue then TorrentStartNow else TorrentStart) Nothing (Just ids) True
 
 -- | Start all torrents respecting the queue order
-startAll :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => Bool -> Timeout -> Eff es ()
+startAll :: MonadTransmission m => Bool -> Timeout -> m ()
 startAll bypassQueue timeout = do
   let method = if bypassQueue then TorrentStartNow else TorrentStart
   ids <- IDs . map (ID . fromJust . toId) <$> getTorrents Nothing (Just []) Nothing
   void . request method Nothing (Just ids) True $ timeout
 
 -- | Stop torrent(s) with provided id(s)
-stopTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+stopTorrent :: MonadTransmission m => IDs -> Timeout -> m ()
 stopTorrent ids = void . request TorrentStop Nothing (Just ids) True
 
 -- | Verify torrent(s) with provided id(s)
-verifyTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+verifyTorrent :: MonadTransmission m => IDs -> Timeout -> m ()
 verifyTorrent ids = void . request TorrentVerify Nothing (Just ids) True
 
 -- | Reannounce torrent(s) with provided id(s)
-reannounceTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+reannounceTorrent :: MonadTransmission m => IDs -> Timeout -> m ()
 reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 
 -- | Get information for torrent with provided id. arguments contains a list of field names to be returned, when arguments=None (default), all fields are requested. See the Torrent class for more information.
@@ -155,7 +166,7 @@ reannounceTorrent ids = void . request TorrentReannounce Nothing (Just ids) True
 --
 --            For example, fetch all fields from transmission daemon with 1500 torrents would take ~5s,
 --            but is only ~0.2s if to fetch 6 fields.
-getTorrent :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => ID -> Maybe [Text] -> Timeout -> Eff es Torrent
+getTorrent :: MonadTransmission m => ID -> Maybe [Text] -> Timeout -> m Torrent
 getTorrent toID fields timeout = do
   torrents <- getTorrents (Just . IDs $ [toID]) fields timeout
   case torrents of
@@ -164,7 +175,7 @@ getTorrent toID fields timeout = do
     _ -> throwIO . TransmissionError $ TransmissionContext ("Received more than one torrent: " ++ show torrents) (Just TorrentGet) Nothing Nothing Nothing Nothing
 
 -- | Get information for torrents with provided ids. For more information see Client.get_torrent().
-getTorrents :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => Maybe IDs -> Maybe [Text] -> Timeout -> Eff es [Torrent]
+getTorrents :: MonadTransmission m => Maybe IDs -> Maybe [Text] -> Timeout -> m [Torrent]
 getTorrents ids fields timeout = do
   args <- buildArguments fields
   response <- request TorrentGet (Just . object $ [("fields", args)]) ids False timeout
@@ -178,7 +189,7 @@ getTorrents ids fields timeout = do
 
 -- | Get information for torrents for recently active torrent. If you want to get recently-removed torrents. you should use this method.
 -- Returns a list of active torrents and a list of ids of recently removed torrents
-getRecentlyActiveTorrents :: (HttpClient :> es, Client :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es ([Torrent], IDs)
+getRecentlyActiveTorrents :: MonadTransmission m => Maybe [Text] -> Timeout -> m ([Torrent], IDs)
 getRecentlyActiveTorrents fields timeout = do
   args <- buildArguments fields
   result <- request TorrentGet (Just . object $ [("fields", args)]) (Just RecentlyActive) False timeout
@@ -198,7 +209,7 @@ getRecentlyActiveTorrents fields timeout = do
   pure (tors, IDs removed)
 
 -- | change torrent(s) parameters for the torrents with the supplied id(s)
-changeTorrents :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> Timeout -> Maybe Priority -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe FilePath -> Maybe Int -> Maybe [Priority] -> Maybe [Priority] -> Maybe [Priority] -> Maybe Int -> Maybe Int -> Maybe IdleMode -> Maybe Rational -> Maybe RatioLimitMode -> Maybe [Text] -> Maybe Text -> Maybe Text -> Maybe [[Text]] -> Maybe [(Int, Text)] -> Maybe [Int] -> [(Key, Value)] -> Eff es ()
+changeTorrents :: MonadTransmission m => IDs -> Timeout -> Maybe Priority -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe [Int] -> Maybe [Int] -> Maybe Bool -> Maybe FilePath -> Maybe Int -> Maybe [Priority] -> Maybe [Priority] -> Maybe [Priority] -> Maybe Int -> Maybe Int -> Maybe IdleMode -> Maybe Rational -> Maybe RatioLimitMode -> Maybe [Text] -> Maybe Text -> Maybe Text -> Maybe [[Text]] -> Maybe [(Int, Text)] -> Maybe [Int] -> [(Key, Value)] -> m ()
 changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploadLimit uploadLimited filesUnwanted filesWanted honorsSessionsLimits location peerLimit priorityHigh priorityLow priorityNormal queuePosition
   seedIdleLimit seedIdleMode seedRatioLimit seedRatioMode trackerAdd labels group trackerList trackerReplace trackerRemove additionalArgs = do
     let args = (additionalArgs ++) . catMaybes $ [("bandwidthPriority" .=) <$> bandwidthPriority, ("downloadLimit" .=) <$> downloadLimit, ("downloadLimited" .=) <$> downloadLimited, ("uploadLimit" .=) <$> uploadLimit,
@@ -213,13 +224,13 @@ changeTorrents ids timeout bandwidthPriority downloadLimit downloadLimited uploa
 
 
 -- | Move torrent data to a new location
-moveTorrentData :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> FilePath -> Timeout -> Bool -> Eff es ()
+moveTorrentData :: MonadTransmission m => IDs -> FilePath -> Timeout -> Bool -> m ()
 moveTorrentData ids location timeout move = do
   let args = object ["location" .= location, "move" .= move]
   void $ request TorrentSetLocation (Just args) (Just ids) True timeout
 
 -- | Rename the path of a torrent, doesn't move it.
-renameTorrentPath :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => ID -> FilePath -> Text -> Timeout -> Eff es (Text, Text)
+renameTorrentPath :: MonadTransmission m => ID -> FilePath -> Text -> Timeout -> m (Text, Text)
 renameTorrentPath toID location name timeout = do
   result <- request TorrentRenamePath (Just . object $ ["path" .= location, "name" .= name]) (Just . IDs $ [toID]) True timeout
   case (fromJSON result :: A.Result (Map Text Text)) of
@@ -227,23 +238,23 @@ renameTorrentPath toID location name timeout = do
     A.Success km -> pure (km ! "path", km ! "name")
 
 -- | Move transfer to the top of the queue
-queueTop :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueTop :: MonadTransmission m => IDs -> Timeout -> m ()
 queueTop ids timeout = void $ request QueueMoveTop Nothing (Just ids) True timeout
 
 -- | Move transfer to the bottom of the queue
-queueBottom :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueBottom :: MonadTransmission m => IDs -> Timeout -> m ()
 queueBottom ids timeout = void $ request QueueMoveBottom Nothing (Just ids) True timeout
 
 -- | Move transfer up in the queue
-queueUp :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueUp :: MonadTransmission m => IDs -> Timeout -> m ()
 queueUp ids timeout = void $ request QueueMoveUp Nothing (Just ids) True timeout
 
 -- | Move transfer down in the queue
-queueDown :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => IDs -> Timeout -> Eff es ()
+queueDown :: MonadTransmission m => IDs -> Timeout -> m ()
 queueDown ids timeout = void $ request QueueMoveDown Nothing (Just ids) True timeout
 
 -- | Get Session parameters
-getSession :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Maybe [Text] -> Timeout -> Eff es TS.Session
+getSession :: MonadTransmission m => Maybe [Text] -> Timeout -> m TS.Session
 getSession fields timeout = do
   response <- request SessionGet ((\f -> object [("fields", toJSON f)]) <$> fields) Nothing False timeout
   case fromJSON response of
@@ -251,7 +262,7 @@ getSession fields timeout = do
     A.Success s -> updateVersions >> pure s
 
 -- | Set Session parameters
-setSession :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> Eff es ()
+setSession :: MonadTransmission m => Timeout -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe [Text] -> Maybe FilePath -> Maybe Bool -> Maybe Int -> Maybe EncryptionMode -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Rational -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe Bool -> Maybe FilePath -> Maybe Bool -> Maybe Bool -> Maybe FilePath-> [(Key, Value)] -> m ()
 setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDay altSpeedTimeEnabled altSpeedTimeEnd altSpeedUp blocklistEnabled blockListURL cacheSizeMB dhtEnabled defaultTrackers downloadDir downloadQueueEnabled downloadQueueSize encryption idleSeedingLimit idleSeedingLimitEnabled incompleteDir incompleteDirEnabled lpdEnabled peerLimitGlobal peerLimitPerTorrent peerPort peerPortRandomOnStart pexEnabled portForwardingEnabled queueStalledEnabled queueStalledMinutes renamePartialFiles scriptTorrentDoneEnabled scriptTorrentDoneFilename seedQueueEnabled seedQueueSize seedRatioLimit seedRatioLimited speedLimitDown speedLimitDownEnabled speedLimitUp speedLimitUpEnabled startAddedTorrents trashOriginalTorrentFile utpEnabled scriptTorrentDoneSeedingFilename scriptTorrentDoneSeedingEnabled scriptTorrentAddedEnabled scriptTorrentAddedFilename additionalArgs = do
     let args = (additionalArgs ++) . catMaybes $ [("alt-speed-down" .=) <$> altSpeedDown
                                                  , ("alt-speed-enabled" .=) <$> altSpeedEnabled
@@ -305,7 +316,7 @@ setSession timeout altSpeedDown altSpeedEnabled altSpeedTimeBegin altSpeedTimeDa
 
 -- | Update blocklist. Returns the size of the blocklist
 
-blocklistUpdate :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Timeout -> Eff es Int
+blocklistUpdate :: MonadTransmission m => Timeout -> m Int
 blocklistUpdate timeout = do
   result <- request BlocklistUpdate Nothing Nothing False timeout
   case fromJSON result of
@@ -314,17 +325,17 @@ blocklistUpdate timeout = do
 
 -- | Tests to see if the incoming peer port is accessible from the outside world.
 
-portTest :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Timeout -> Eff es Bool
+portTest :: MonadTransmission m => Timeout -> m Bool
 portTest timeout = extractFieldFromValue "port-is-open" <$> request PortTest Nothing Nothing False timeout
 
 -- | Get the amount of free space (in bytes) at the provided location.
 
-freeSpace :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => FilePath -> Timeout -> Eff es Int
+freeSpace :: MonadTransmission m => FilePath -> Timeout -> m Int
 freeSpace fp timeout = extractFieldFromValue "size-bytes" <$> request FreeSpace (Just . object $ [("path", toJSON fp)]) Nothing False timeout
 
 -- | Get Session statistics
 
-sessionStats :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Timeout -> Eff es SessionStats
+sessionStats :: MonadTransmission m => Timeout -> m SessionStats
 sessionStats timeout = do
   result <- request SessionStats Nothing Nothing False timeout
   case fromJSON result of
@@ -333,7 +344,7 @@ sessionStats timeout = do
 
 -- | create or update a Bandwidth group
 
-setGroup :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> Eff es ()
+setGroup :: MonadTransmission m => Text -> Timeout -> Maybe Bool -> Maybe Bool -> Maybe Int -> Maybe Bool -> Maybe Int -> m ()
 setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown speedLimitUpEnabled speedLimitUp =
   do
     let args = object . catMaybes $ [Just ("name" .= name), ("honorsSessionLimits" .= ) <$> honorsSessionLimits
@@ -345,16 +356,16 @@ setGroup name timeout honorsSessionLimits speedLimitDownEnabled speedLimitDown s
 
 -- | Access Infos about a Bandwidth Group
 
-groupGet :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => Text -> Timeout -> Eff es Value
+groupGet :: MonadTransmission m => Text -> Timeout -> m Value
 groupGet name timeout = V.head . extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ name) Nothing False timeout
 
 -- | Access infos about a list of Bandwidth groups or all of them (if the list is empty)
-groupsGet :: ( Client :> es, HttpClient :> es, Log :> es, Time :> es) => [Text] -> Timeout -> Eff es Value
+groupsGet :: MonadTransmission m => [Text] -> Timeout -> m Value
 groupsGet names timeout = extractFieldFromValue "groups" <$> request GroupGet (Just . toJSON $ names) Nothing False timeout
 
 -- Utility functions
 
-buildArguments :: ( Client :> es) => Maybe [Text] -> Eff es Value
+buildArguments :: ( MonadClient m) => Maybe [Text] -> m Value
 buildArguments fields = getProtocolVersion >>= (\ protocolVersion
         -> pure
              . maybe
@@ -366,28 +377,31 @@ makeJSONPost :: URI -> Value -> Request
 makeJSONPost uri value = req {requestBody = RequestBodyLBS (encode value), HC.method = "POST", requestHeaders = [("Content-Type", "application/json")]}
   where req = parseRequest_ uri
 
-safeRequest :: ( HttpClient :> es, Client :> es, Log :> es) => Value -> Timeout -> Eff es (Response L.ByteString)
+safeRequest :: MonadTransmission m => Value -> Timeout -> m (Response L.ByteString)
 safeRequest query timeout = do
   uri <- getURI
+  headers <- getHeaders
   let baseRequest = makeJSONPost uri query
-      fullRequest = maybe baseRequest (\t -> baseRequest {responseTimeout = responseTimeoutMicro t}) timeout
+      fullRequest = maybe baseRequest (\t -> baseRequest { responseTimeout = responseTimeoutMicro t
+                                                         , requestHeaders = requestHeaders baseRequest ++ headers}) 
+                                                         timeout
   unsafePost <- try . httpLbs $ fullRequest
   case unsafePost of
-    Right r -> 
+    Right r ->
       case statusCode . responseStatus $ r of
         200 -> pure r
         409 -> do
             let sessionId = lookup sessionIdHeaderName . responseHeaders $ r
             case sessionId of
               Nothing -> do
-                let tc = TransmissionConnectError $ TransmissionContext "Could not find session id" Nothing 
+                let tc = TransmissionConnectError $ TransmissionContext "Could not find session id" Nothing
                           (Just query) Nothing (Just r) (Just fullRequest)
                 throwIO tc
-              Just v -> do 
+              Just v -> do
                 setHeaders [(sessionIdHeaderName, v)]
                 safeRequest query timeout
         sc -> do
-          let tc = TransmissionConnectError $ TransmissionContext ("Error " ++ show sc) Nothing (Just query) 
+          let tc = TransmissionConnectError $ TransmissionContext ("Error " ++ show sc) Nothing (Just query)
                     Nothing (Just r) (Just fullRequest)
           throwIO tc
     Left e -> do
@@ -406,7 +420,7 @@ safeRequest query timeout = do
                  throwIO e
 
 
-request :: (HasCallStack, HttpClient :> es, Client :> es, Log :> es, Time :> es) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> Eff es Value
+request :: (HasCallStack, MonadTransmission m) => RPCMethod -> Maybe Value -> Maybe IDs -> Bool -> Timeout -> m Value
 request _ _ Nothing True _ = error "request requires ids, received nothing"
 request _ _ (Just (IDs [])) True _ = error "request requires ids, received empty list"
 request rpcm args ids _ timeout = do
@@ -419,7 +433,7 @@ request rpcm args ids _ timeout = do
   let body = parse json $ responseBody response
   examineBody body rpcm query response
 
-examineBody :: (Client :> es, Log :> es) => Result Value -> RPCMethod -> Value -> Response L.ByteString -> Eff es Value
+examineBody :: MonadTransmission m => Result Value -> RPCMethod -> Value -> Response L.ByteString -> m Value
 examineBody (Fail _ _ e) rpcm query response = logInfo_ (T.pack $ "Error:\n" ++ "Request: " ++ show query ++ "\n" ++ "HTTP Data: " ++  show response) >> throwIO (TransmissionError (TransmissionContext ("failed to parse response as JSON:\n" ++ show e) (Just rpcm ) (Just query) Nothing (Just response) Nothing))
 examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.lookup "result" bodyMap of
                                         Nothing -> throwIO . TransmissionError $ TransmissionContext "Query failed, response data missing result:\n" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
@@ -441,7 +455,7 @@ examineBody (Done _ jsonBody@(Object bodyMap)) rpcm query response = case K.look
                       _                 -> pure Null
                 _ -> throwIO . TransmissionError $ TransmissionContext "arguments is not an Object" (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
       | otherwise = throwIO . TransmissionError $ TransmissionContext ("Query failed with result " ++ show success) (Just rpcm) (Just query) (Just jsonBody) (Just response) Nothing
-     added :: KeyMap Value -> Eff es Value
+     added :: MonadTransmission m => KeyMap Value -> m Value
      added res = do
                    let item
                           | K.member "torrent-added" res = K.lookup "torrent-added" res
@@ -457,14 +471,14 @@ valueInsert key value (Object km ) = Object . K.insert (fromString key) (toJSON 
 valueInsert key value Null = Object . K.singleton (fromString key) $ toJSON value
 valueInsert key value v = error (show v ++ " is not an Object and not Null, cannot insert value " ++ (show . toJSON $ value) ++ " for key " ++ key)
 
-updateSession :: (Client :> es) => Value -> Eff es ()
+updateSession :: (MonadClient m) => Value -> m ()
 updateSession v = do
   let newSesh = case fromJSON v of
                   A.Error s   -> error s
                   A.Success s -> s
-  setClientSession newSesh 
+  setClientSession newSesh
 
-updateVersions :: ( Client :> es) => Eff es ()
+updateVersions :: ( MonadClient m) => m ()
 updateVersions = do
   sesh <- getClientSession
   pv <- getProtocolVersion

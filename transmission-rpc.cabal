@@ -66,9 +66,10 @@ library
   -- Modules exported by the library.
   exposed-modules:
     Effectful.Network.HTTP.Client
-    Effectful.RPC.Client
+    Effectful.Transmission.RPC.Client
     Transmission.RPC.Client
     Transmission.RPC.Enum
+    Transmission.RPC.MonadTransmission
     Transmission.RPC.Session
     Transmission.RPC.Torrent
     Transmission.RPC.Types
@@ -96,15 +97,17 @@ library
     , effectful             ^>=2.5.1.0
     , effectful-core        ^>=2.5.1.0
     , http-client           ^>=0.7.19
-    , http-types ^>=0.12.4
+    , http-types            ^>=0.12.4
     , lens                  ^>=5.3.3
     , log-base              ^>=0.12.1.0
     , log-effectful         ^>=1.0.1.0
+    , microlens             ^>=0.5.0.0
     , microlens-th          ^>=0.4.3.18
-    , microlens ^>=0.5.0.0
+    , monad-time            ^>=0.4.0.0
     , monad-time-effectful  ^>=1.0.0.0
     , text                  ^>=2.1.2
     , time                  ^>=1.14
+    , unliftio-core         ^>=0.2.1.0
     , unordered-containers  ^>=0.2.20
     , utf8-string           ^>=1.0.2
     , vector                ^>=0.13.2.0
