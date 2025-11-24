@@ -23,7 +23,7 @@ instance (Monad m, MonadIO m, MonadReader (IORef ClientRep) m, MonadLog m, Monad
 instance (Monad m, MonadReader Manager m, MonadIO m) => MonadHttp m where
   httpLbs req = ask >>= liftIO . HC.httpLbs req
 
-instance (Applicative m, Monad m, MonadIO m, MonadUnliftIO m, MonadReader Manager m, MonadReader (IORef ClientRep) m, MonadLog m, MonadTime m) => MonadTransmission m where
+instance (Applicative m, Monad m, MonadIO m, MonadUnliftIO m, MonadClient m, MonadHttp m) => MonadTransmission m where
   throwIO = liftIO . E.throwIO
   try ma = withRunInIO $ \run -> E.try (run ma)
   hGetContents = liftIO . B.hGetContents
