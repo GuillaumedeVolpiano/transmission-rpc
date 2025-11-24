@@ -24,24 +24,20 @@ import           Effectful.Network.HTTP.Client      (HttpClient)
 import qualified Effectful.Network.HTTP.Client      as EH (httpLbs)
 import           Effectful.Time                     (Time)
 import           Effectful.Transmission.RPC.Client  (Client)
-import qualified Effectful.Transmission.RPC.Client  as EC (getClientSession,
-                                                           getProtocolVersion,
-                                                           getSemVerVersion,
-                                                           getServerVersion,
-                                                           getURI,
-                                                           setClientSession,
-                                                           setProtocolVersion,
-                                                           setSemVerVersion,
-                                                           setServerVersion,
-                                                           getHeaders,
-                                                           setHeaders)
+import qualified Effectful.Transmission.RPC.Client  as EC (getStaticClient,
+                                                           setStaticClient)
 import           GHC.Stack                          (HasCallStack)
+import           Lens.Micro                         ((.~), (^.))
 import           Log                                (MonadLog)
 import           Network.HTTP.Client                (Request, Response)
 import           Network.HTTP.Types                 (Header)
 import           System.IO                          (Handle)
 import           Transmission.RPC.Session           (Session)
-import           Transmission.RPC.Types             (URI)
+import           Transmission.RPC.Types             (ClientRep, URI, headers,
+                                                     protocolVersion,
+                                                     semVerVersion,
+                                                     serverVersion, session,
+                                                     uri)
 
 
 class (Applicative m, Monad m, MonadClient m, MonadHttp m) => MonadTransmission m where
@@ -54,17 +50,42 @@ class Monad m => MonadHttp m where
   httpLbs :: Request -> m (Response L.ByteString)
 
 class (Monad m, MonadLog m, MonadTime m) => MonadClient m where
+  getClient :: m ClientRep
+  setClient :: (ClientRep -> ClientRep) -> m ()
+
   getProtocolVersion :: m Int
+  getProtocolVersion = (^. protocolVersion) <$> getClient
+
+  setProtocolVersion :: Int -> m ()
+  setProtocolVersion pv = setClient (protocolVersion .~ pv)
+
   getURI :: m URI
+  getURI = (^. uri) <$> getClient
+
   getClientSession :: m Session
-  setClientSession :: Session -> m ()
+  getClientSession = (^. session) <$> getClient
+
+  setClientSession :: Session -> m ()
+  setClientSession sesh = setClient (session .~ sesh)
+
   getServerVersion :: m (Maybe Text)
+  getServerVersion = (^. serverVersion) <$> getClient
+
+  setServerVersion :: Maybe Text -> m ()
+  setServerVersion sv = setClient (serverVersion .~ sv)
+
   getSemVerVersion :: m (Maybe Text)
-  setProtocolVersion :: Int -> m ()
-  setServerVersion :: Maybe Text -> m ()
+  getSemVerVersion = (^. semVerVersion) <$> getClient
+
   setSemVerVersion :: Maybe Text -> m ()
+  setSemVerVersion svv = setClient (semVerVersion .~ svv)
+
+  getHeaders :: m [Header]
+  getHeaders = (^. headers) <$> getClient
+
   setHeaders :: [Header] -> m ()
-  getHeaders :: m [Header]
+  setHeaders h = setClient (headers .~ h)
+
 
 instance (FileSystem :> es, HttpClient :> es, Client :> es, Log :> es, Time :> es)
   => MonadTransmission (Eff es) where
@@ -77,14 +98,5 @@ instance (HttpClient :> es) => MonadHttp (Eff es) where
     httpLbs = EH.httpLbs
 
 instance (Client :> es, Log :> es, Time :> es) => MonadClient (Eff es) where
-    getProtocolVersion = EC.getProtocolVersion
-    getURI = EC.getURI
-    getClientSession = EC.getClientSession
-    setClientSession = EC.setClientSession
-    getServerVersion = EC.getServerVersion
-    getSemVerVersion = EC.getSemVerVersion
-    setProtocolVersion = EC.setProtocolVersion
-    setServerVersion = EC.setServerVersion
-    setSemVerVersion = EC.setSemVerVersion
-    setHeaders = EC.setHeaders
-    getHeaders = EC.getHeaders
+  getClient = EC.getStaticClient
+  setClient = EC.setStaticClient

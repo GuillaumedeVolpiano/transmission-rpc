@@ -5,7 +5,6 @@
 module Effectful.Network.HTTP.Client (
                                        HttpClient
                                      , runHttpClient
-                                     , getManager
                                      , httpLbs
                                      )
 where
