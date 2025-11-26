@@ -50,6 +50,7 @@ import           Data.Aeson.Parser                  (json)
 import           Data.Attoparsec.ByteString.Lazy    (Result (..), parse)
 import qualified Data.ByteString.Base64             as B64 (encode)
 import qualified Data.ByteString.Lazy               as L (ByteString)
+import Data.CaseInsensitive (original)
 import           Data.Fixed                         (E3, Fixed, showFixed)
 import           Data.Functor                       (void)
 import qualified Data.HashSet                       as S (fromList)
@@ -58,12 +59,12 @@ import           Data.Map                           (Map, (!))
 import           Data.Maybe                         (catMaybes, fromJust,
                                                      fromMaybe)
 import           Data.Text                          (Text)
-import qualified Data.Text                          as T (pack)
+import qualified Data.Text                          as T (pack, append)
 import qualified Data.Text.Encoding                 as TE (decodeUtf8)
 import           Data.Text.Encoding.Error           (UnicodeException (DecodeError))
 import qualified Data.Vector                        as V (head, toList)
 import           GHC.Stack                          (HasCallStack)
-import           Log                                (logAttention_, logInfo_)
+import           Log                                (logAttention_, logInfo_, logTrace_)
 import           Network.HTTP.Client                (HttpException (HttpExceptionRequest),
                                                      HttpExceptionContent (ResponseTimeout),
                                                      Request, RequestBody (..),
@@ -381,16 +382,18 @@ safeRequest :: MonadTransmission m => Value -> Timeout -> m (Response L.ByteStri
 safeRequest query timeout = do
   uri <- getURI
   headers <- getHeaders
+  logTrace_ . T.pack $ show headers
   let baseRequest = makeJSONPost uri query
-      fullRequest = maybe baseRequest (\t -> baseRequest { responseTimeout = responseTimeoutMicro t
-                                                         , requestHeaders = requestHeaders baseRequest ++ headers}) 
-                                                         timeout
+  logTrace_ . T.pack . show $ requestHeaders baseRequest ++ headers
+  let fullRequest = baseRequest { responseTimeout = maybe (responseTimeout baseRequest) responseTimeoutMicro timeout
+                                                         , requestHeaders = requestHeaders baseRequest ++ headers}
   unsafePost <- try . httpLbs $ fullRequest
   case unsafePost of
     Right r ->
       case statusCode . responseStatus $ r of
         200 -> pure r
         409 -> do
+            logTrace_ $ "Got 409, need " `T.append` (TE.decodeUtf8 . original $ sessionIdHeaderName)
             let sessionId = lookup sessionIdHeaderName . responseHeaders $ r
             case sessionId of
               Nothing -> do
